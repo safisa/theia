@@ -16,16 +16,16 @@
 
 import { injectable, inject } from '@theia/core/shared/inversify';
 import { StatusBar } from '@theia/core/lib/browser/status-bar/status-bar';
-import { StatusBarAlignment, StatusBarEntry, FrontendApplicationContribution, PreferenceServiceImpl, PreferenceChange, codicon } from '@theia/core/lib/browser';
-import { MessageService } from '@theia/core/lib/common';
-import { CommandRegistry } from '@theia/core/shared/@phosphor/commands';
-import { Menu } from '@theia/core/shared/@phosphor/widgets';
+import { StatusBarAlignment, StatusBarEntry, FrontendApplicationContribution, codicon } from '@theia/core/lib/browser';
+import { MessageService, PreferenceChange, PreferenceServiceImpl } from '@theia/core/lib/common';
+import { CommandRegistry } from '@theia/core/shared/@lumino/commands';
+import { Menu } from '@theia/core/shared/@lumino/widgets';
 import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
 import { ConnectionStatusService, ConnectionStatus } from '@theia/core/lib/browser/connection-status-service';
 import { PluginDevServer } from '../common/plugin-dev-protocol';
 import { HostedPluginManagerClient, HostedInstanceState, HostedPluginCommands, HostedInstanceData } from './hosted-plugin-manager-client';
 import { HostedPluginLogViewer } from './hosted-plugin-log-viewer';
-import { HostedPluginPreferences } from './hosted-plugin-preferences';
+import { HostedPluginPreferences } from '../common/hosted-plugin-preferences';
 import { nls } from '@theia/core/lib/common/nls';
 
 /**
@@ -305,7 +305,7 @@ export class HostedPluginController implements FrontendApplicationContribution {
     protected addCommandsForRunningPlugin(commands: CommandRegistry, menu: Menu): void {
         commands.addCommand(HostedPluginCommands.STOP.id, {
             label: nls.localize('theia/plugin-dev/stopInstance', 'Stop Instance'),
-            icon: codicon('debug-stop'),
+            iconClass: codicon('debug-stop'),
             execute: () => setTimeout(() => this.hostedPluginManagerClient.stop(), 100)
         });
 
@@ -316,7 +316,7 @@ export class HostedPluginController implements FrontendApplicationContribution {
 
         commands.addCommand(HostedPluginCommands.RESTART.id, {
             label: nls.localize('theia/plugin-dev/restartInstance', 'Restart Instance'),
-            icon: codicon('debug-restart'),
+            iconClass: codicon('debug-restart'),
             execute: () => setTimeout(() => this.hostedPluginManagerClient.restart(), 100)
         });
 
@@ -332,7 +332,7 @@ export class HostedPluginController implements FrontendApplicationContribution {
     protected addCommandsForStoppedPlugin(commands: CommandRegistry, menu: Menu): void {
         commands.addCommand(HostedPluginCommands.START.id, {
             label: nls.localize('theia/plugin-dev/startInstance', 'Start Instance'),
-            icon: codicon('play'),
+            iconClass: codicon('play'),
             execute: () => setTimeout(() => this.hostedPluginManagerClient.start(), 100)
         });
 
@@ -343,7 +343,7 @@ export class HostedPluginController implements FrontendApplicationContribution {
 
         commands.addCommand(HostedPluginCommands.DEBUG.id, {
             label: nls.localize('theia/plugin-dev/debugInstance', 'Debug Instance'),
-            icon: codicon('debug'),
+            iconClass: codicon('debug'),
             execute: () => setTimeout(() => this.hostedPluginManagerClient.debug(), 100)
         });
 

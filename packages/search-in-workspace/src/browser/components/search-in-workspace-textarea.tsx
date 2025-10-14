@@ -16,19 +16,19 @@
 
 import { Key, KeyCode } from '@theia/core/lib/browser';
 import * as React from '@theia/core/shared/react';
-import TextareaAutosize from 'react-autosize-textarea';
+import TextareaAutosize from 'react-textarea-autosize';
 import debounce = require('@theia/core/shared/lodash.debounce');
 
 interface HistoryState {
     history: string[];
     index: number;
 };
-type TextareaAttributes = React.TextareaHTMLAttributes<HTMLTextAreaElement>;
+type TextareaAttributes = Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'style'>;
 
 export class SearchInWorkspaceTextArea extends React.Component<TextareaAttributes, HistoryState> {
     static LIMIT = 100;
 
-    private textarea = React.createRef<HTMLTextAreaElement>();
+    textarea = React.createRef<HTMLTextAreaElement>();
 
     constructor(props: TextareaAttributes) {
         super(props);
@@ -80,6 +80,10 @@ export class SearchInWorkspaceTextArea extends React.Component<TextareaAttribute
             e.preventDefault();
         }
 
+        setTimeout(() => {
+            this.forceUpdate();
+        }, 0);
+
         this.props.onKeyDown?.(e);
     };
 
@@ -114,6 +118,7 @@ export class SearchInWorkspaceTextArea extends React.Component<TextareaAttribute
      */
     protected readonly onChange = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
         this.addToHistory();
+        this.forceUpdate();
         this.props.onChange?.(e);
     };
 
@@ -134,20 +139,21 @@ export class SearchInWorkspaceTextArea extends React.Component<TextareaAttribute
     }
 
     override render(): React.ReactNode {
-        const { onResize, ...filteredProps } = this.props;
+        /* One row for an empty search input box (fixes bug #15229), seven rows for the normal state (from VS Code) */
+        const maxRows = this.value.length ? 7 : 1;
+
         return (
             <TextareaAutosize
-                {...filteredProps}
+                {...this.props}
                 autoCapitalize="off"
                 autoCorrect="off"
-                maxRows={7} /* from VS Code */
+                maxRows={maxRows}
                 onChange={this.onChange}
                 onKeyDown={this.onKeyDown}
                 ref={this.textarea}
                 rows={1}
                 spellCheck={false}
-            >
-            </TextareaAutosize>
+            />
         );
     }
 }

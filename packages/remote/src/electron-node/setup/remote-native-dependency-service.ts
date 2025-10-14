@@ -21,7 +21,7 @@ import * as decompress from 'decompress';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { DependencyDownload, DirectoryDependencyDownload, RemoteNativeDependencyContribution } from './remote-native-dependency-contribution';
-import { RemotePlatform } from '../remote-types';
+import { RemotePlatform } from '@theia/core/lib/node/remote/remote-cli-contribution';
 
 const decompressTar = require('decompress-tar');
 const decompressTargz = require('decompress-targz');
@@ -69,7 +69,11 @@ export class RemoteNativeDependencyService {
             : { ...DEFAULT_HTTP_OPTIONS, ...downloadURI };
         const req = await this.requestService.request(options);
         if (RequestContext.isSuccess(req)) {
-            return Buffer.from(req.buffer);
+            if (typeof req.buffer === 'string') {
+                return Buffer.from(req.buffer, 'utf8');
+            } else {
+                return Buffer.from(req.buffer);
+            }
         } else {
             throw new Error('Server error while downloading native dependency from: ' + options.url);
         }

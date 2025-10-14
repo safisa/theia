@@ -39,6 +39,7 @@ import { URI, ThemeIcon } from './types-impl';
 import { ScmCommandArg } from '../common/plugin-api-rpc';
 import { sep } from '@theia/core/lib/common/paths';
 import { PluginIconPath } from './plugin-icon-path';
+import { createAPIObject } from './plugin-context';
 type ProviderHandle = number;
 type GroupHandle = number;
 type ResourceStateHandle = number;
@@ -290,6 +291,7 @@ interface ValidateInput {
 export class ScmInputBoxImpl implements theia.SourceControlInputBox {
 
     private _value: string = '';
+    apiObject: theia.SourceControlInputBox;
 
     get value(): string {
         return this._value;
@@ -354,7 +356,7 @@ export class ScmInputBoxImpl implements theia.SourceControlInputBox {
     }
 
     constructor(private plugin: Plugin, private proxy: ScmMain, private sourceControlHandle: number) {
-        // noop
+        this.apiObject = createAPIObject(this);
     }
 
     onInputBoxValueChange(value: string): void {
@@ -403,9 +405,17 @@ class ScmResourceGroupImpl implements theia.SourceControlResourceGroup {
         this.proxy.$updateGroup(this.sourceControlHandle, this.handle, this.features);
     }
 
+    private _contextValue: string | undefined = undefined;
+    get contextValue(): string | undefined { return this._contextValue; }
+    set contextValue(contextValue: string | undefined) {
+        this._contextValue = contextValue;
+        this.proxy.$updateGroup(this.sourceControlHandle, this.handle, this.features);
+    }
+
     get features(): SourceControlGroupFeatures {
         return {
-            hideWhenEmpty: this.hideWhenEmpty
+            hideWhenEmpty: this.hideWhenEmpty,
+            contextValue: this.contextValue
         };
     }
 
@@ -475,7 +485,7 @@ class ScmResourceGroupImpl implements theia.SourceControlResourceGroup {
                 // TODO remove the letter and colorId fields when the FileDecorationProvider is applied, see https://github.com/eclipse-theia/theia/pull/8911
                 const rawResource = {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    handle, sourceUri, letter: (r as any).letter, colorId: (r as any).color.id, icons,
+                    handle, sourceUri, letter: (r as any).letter, colorId: (r as any).color?.id, icons,
                     tooltip, strikeThrough, faded, contextValue, command
                 } as ScmRawResource;
 
@@ -543,8 +553,7 @@ class SourceControlImpl implements theia.SourceControl {
         return this._rootUri;
     }
 
-    private _inputBox: ScmInputBoxImpl;
-    get inputBox(): ScmInputBoxImpl { return this._inputBox; }
+    readonly inputBox: ScmInputBoxImpl;
 
     private _count: number | undefined = undefined;
 
@@ -632,6 +641,11 @@ class SourceControlImpl implements theia.SourceControl {
     private readonly onDidChangeSelectionEmitter = new Emitter<boolean>();
     readonly onDidChangeSelection = this.onDidChangeSelectionEmitter.event;
 
+    private readonly onDidDisposeEmitter = new Emitter<void>();
+    readonly onDidDispose = this.onDidDisposeEmitter.event;
+
+    readonly onDidDisposeParent: Event<void>;
+
     private handle: number = SourceControlImpl.handlePool++;
 
     constructor(
@@ -640,10 +654,13 @@ class SourceControlImpl implements theia.SourceControl {
         private commands: CommandRegistryImpl,
         private _id: string,
         private _label: string,
-        private _rootUri?: theia.Uri
+        private _rootUri?: theia.Uri,
+        _iconPath?: theia.IconPath,
+        _parent?: SourceControlImpl
     ) {
-        this._inputBox = new ScmInputBoxImpl(plugin, this.proxy, this.handle);
+        this.inputBox = new ScmInputBoxImpl(plugin, this.proxy, this.handle);
         this.proxy.$registerSourceControl(this.handle, _id, _label, _rootUri);
+        this.onDidDisposeParent = _parent ? _parent.onDidDispose : Event.None;
     }
 
     private createdResourceGroups = new Map<ScmResourceGroupImpl, Disposable>();
@@ -727,6 +744,9 @@ class SourceControlImpl implements theia.SourceControl {
 
         this.groups.forEach(group => group.dispose());
         this.proxy.$unregisterSourceControl(this.handle);
+
+        this.onDidDisposeEmitter.fire();
+        this.onDidDisposeEmitter.dispose();
     }
 }
 

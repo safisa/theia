@@ -14,17 +14,23 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
+const { timeout } = require('@theia/core/lib/common/promise-util');
+
 // @ts-check
 describe('SCM', function () {
 
     const { assert } = chai;
 
+    const { HostedPluginSupport } = require('@theia/plugin-ext/lib/hosted/browser/hosted-plugin');
     const Uri = require('@theia/core/lib/common/uri');
     const { ApplicationShell } = require('@theia/core/lib/browser/shell/application-shell');
     const { ContextKeyService } = require('@theia/core/lib/browser/context-key-service');
     const { ScmContribution } = require('@theia/scm/lib/browser/scm-contribution');
     const { ScmService } = require('@theia/scm/lib/browser/scm-service');
     const { ScmWidget } = require('@theia/scm/lib/browser/scm-widget');
+    const { CommandRegistry } = require('@theia/core/lib/common');
+    const { PreferenceService } = require('@theia/core/lib/browser');
+
 
     /** @type {import('inversify').Container} */
     const container = window['theia'].container;
@@ -32,6 +38,9 @@ describe('SCM', function () {
     const scmContribution = container.get(ScmContribution);
     const shell = container.get(ApplicationShell);
     const service = container.get(ScmService);
+    const commandRegistry = container.get(CommandRegistry);
+    const pluginService = container.get(HostedPluginSupport);
+    const preferences = container.get(PreferenceService);
 
     /** @type {ScmWidget} */
     let scmWidget;
@@ -39,10 +48,45 @@ describe('SCM', function () {
     /** @type {ScmService} */
     let scmService;
 
+    const gitPluginId = 'vscode.git';
+
+    /**
+         * @param {() => unknown} condition
+         * @param {number | undefined} [timeout]
+         * @param {string | undefined} [message]
+         * @returns {Promise<void>}
+         */
+    async function waitForAnimation(condition, maxWait, message) {
+        if (maxWait === undefined) {
+            maxWait = 100000;
+        }
+        const endTime = Date.now() + maxWait;
+        do {
+            await (timeout(100));
+            if (condition()) {
+                return true;
+            }
+            if (Date.now() > endTime) {
+                throw new Error(message ?? 'Wait for animation timed out.');
+            }
+        } while (true);
+    }
+
+
+    before(async () => {
+        preferences.set('git.autoRepositoryDetection', true);
+        preferences.set('git.openRepositoryInParentFolders', 'always');
+    });
+
     beforeEach(async () => {
+        if (!pluginService.getPlugin(gitPluginId)) {
+            throw new Error(gitPluginId + ' should be started');
+        }
+        await pluginService.activatePlugin(gitPluginId);
         await shell.leftPanelHandler.collapse();
         scmWidget = await scmContribution.openView({ activate: true, reveal: true });
         scmService = service;
+        await waitForAnimation(() => scmService.selectedRepository, 10000, 'selected repository is not defined');
     });
 
     afterEach(() => {
@@ -53,7 +97,6 @@ describe('SCM', function () {
     });
 
     describe('scm-view', () => {
-
         it('the view should open and activate successfully', () => {
             assert.notEqual(scmWidget, undefined);
             assert.strictEqual(scmWidget, shell.activeWidget);
@@ -125,6 +168,9 @@ describe('SCM', function () {
                 const foundRepository = scmService.findRepository(new Uri.default(rootUri));
                 assert.notEqual(foundRepository, undefined);
             }
+            else {
+                assert.fail('Selected repository is undefined');
+            }
         });
 
         it('should not find a repository for an unknown uri', () => {
@@ -149,6 +195,9 @@ describe('SCM', function () {
                     const commit = await amendSupport.getLastCommit();
                     assert.notEqual(commit, undefined);
                 }
+            }
+            else {
+                assert.fail('Selected repository is undefined');
             }
         });
 

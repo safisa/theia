@@ -18,9 +18,11 @@ import { injectable, inject, postConstruct } from 'inversify';
 import { NewWindowOptions, WindowSearchParams } from '../../common/window';
 import { DefaultWindowService } from '../../browser/window/default-window-service';
 import { ElectronMainWindowService } from '../../electron-common/electron-main-window-service';
-import { ElectronWindowPreferences } from './electron-window-preferences';
+import { ElectronWindowPreferences } from '../../electron-common/electron-window-preferences';
 import { ConnectionCloseService } from '../../common/messaging/connection-management';
 import { FrontendIdProvider } from '../../browser/messaging/frontend-id-provider';
+import { WindowReloadOptions } from '../../browser/window/window-service';
+import { Listener, ListenerList } from '../../common/listener';
 
 @injectable()
 export class ElectronWindowService extends DefaultWindowService {
@@ -47,6 +49,9 @@ export class ElectronWindowService extends DefaultWindowService {
     @inject(ConnectionCloseService)
     protected readonly connectionCloseService: ConnectionCloseService;
 
+    protected readonly onWillShutDownListeners = new ListenerList<void, Promise<void>>();
+    readonly onWillShutDown: Listener.Registration<void, Promise<void>> = this.onWillShutDownListeners.registration;
+
     override openNewWindow(url: string, { external }: NewWindowOptions = {}): undefined {
         this.delegate.openNewWindow(url, { external });
         return undefined;
@@ -56,6 +61,9 @@ export class ElectronWindowService extends DefaultWindowService {
         this.delegate.openNewDefaultWindow(params);
     }
 
+    override focus(): void {
+        window.electronTheiaCore.focusWindow();
+    }
     @postConstruct()
     protected init(): void {
         // Update the default zoom level on startup when the preferences event is fired.
@@ -70,7 +78,13 @@ export class ElectronWindowService extends DefaultWindowService {
     }
 
     protected override registerUnloadListeners(): void {
-        window.electronTheiaCore.setCloseRequestHandler(reason => this.isSafeToShutDown(reason));
+        window.electronTheiaCore.setCloseRequestHandler(async reason => {
+            const willShutDown = await this.isSafeToShutDown(reason);
+            if (willShutDown) {
+                await Listener.awaitAll(undefined, this.onWillShutDownListeners);
+            }
+            return willShutDown;
+        });
         window.addEventListener('unload', () => {
             this.onUnloadEmitter.fire();
         });
@@ -86,12 +100,20 @@ export class ElectronWindowService extends DefaultWindowService {
         }
     }
 
-    override reload(params?: WindowSearchParams): void {
+    override reload(params?: WindowReloadOptions): void {
         if (params) {
-            const query = Object.entries(params).map(([name, value]) => `${name}=${value}`).join('&');
-            location.search = query;
+            const newLocation = new URL(location.href);
+            if (params.search) {
+                const query = Object.entries(params.search).map(([name, value]) => `${name}=${value}`).join('&');
+                newLocation.search = query;
+            }
+            if (params.hash) {
+                newLocation.hash = '#' + params.hash;
+            }
+            window.electronTheiaCore.requestReload(newLocation.toString());
         } else {
             window.electronTheiaCore.requestReload();
         }
     }
 }
+

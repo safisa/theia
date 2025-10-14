@@ -13,7 +13,7 @@
 //
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 //
-import { IpcRendererEvent } from '@theia/electron/shared/electron';
+import { IpcRendererEvent, webUtils } from '@theia/electron/shared/electron';
 import { Disposable } from '../common/disposable';
 import { StopReason } from '../common/frontend-application-state';
 import { NativeKeyboardLayout } from '../common/keyboard/keyboard-layout-provider';
@@ -26,7 +26,8 @@ import {
     CHANNEL_IS_FULL_SCREEN, CHANNEL_SET_MENU_BAR_VISIBLE, CHANNEL_REQUEST_CLOSE, CHANNEL_SET_TITLE_STYLE, CHANNEL_RESTART,
     CHANNEL_REQUEST_RELOAD, CHANNEL_APP_STATE_CHANGED, CHANNEL_SHOW_ITEM_IN_FOLDER, CHANNEL_READ_CLIPBOARD, CHANNEL_WRITE_CLIPBOARD,
     CHANNEL_KEYBOARD_LAYOUT_CHANGED, CHANNEL_IPC_CONNECTION, InternalMenuDto, CHANNEL_REQUEST_SECONDARY_CLOSE, CHANNEL_SET_BACKGROUND_COLOR,
-    CHANNEL_WC_METADATA, CHANNEL_ABOUT_TO_CLOSE
+    CHANNEL_WC_METADATA, CHANNEL_ABOUT_TO_CLOSE, CHANNEL_OPEN_WITH_SYSTEM_APP,
+    CHANNEL_OPEN_URL, CHANNEL_SET_THEME, CHANNEL_OPEN_DEVTOOLS_FOR_WINDOW
 } from '../electron-common/electron-api';
 
 // eslint-disable-next-line import/no-extraneous-dependencies
@@ -34,9 +35,19 @@ const { ipcRenderer, contextBridge } = require('electron');
 
 // a map of menuId => map<handler id => handler>
 const commandHandlers = new Map<number, Map<number, () => void>>();
-let nextHandlerId = 0;
-const mainMenuId = 0;
+let nextHandlerId = 1;
+const mainMenuId = 1;
 let nextMenuId = mainMenuId + 1;
+
+let openUrlHandler: ((url: string) => Promise<boolean>) | undefined;
+
+ipcRenderer.on(CHANNEL_OPEN_URL, async (event: Electron.IpcRendererEvent, url: string, replyChannel: string) => {
+    if (openUrlHandler) {
+        event.sender.send(replyChannel, await openUrlHandler(url));
+    } else {
+        event.sender.send(replyChannel, false);
+    }
+});
 
 function convertMenu(menu: MenuDto[] | undefined, handlerMap: Map<number, () => void>): InternalMenuDto[] | undefined {
     if (!menu) {
@@ -75,17 +86,22 @@ const api: TheiaCoreAPI = {
         ipcRenderer.send(CHANNEL_SET_MENU, mainMenuId, convertMenu(menu, handlers));
     },
     getSecurityToken: () => ipcRenderer.sendSync(CHANNEL_GET_SECURITY_TOKEN),
-    focusWindow: (name: string) => ipcRenderer.send(CHANNEL_FOCUS_WINDOW, name),
+    focusWindow: (name?: string) => ipcRenderer.send(CHANNEL_FOCUS_WINDOW, name),
     showItemInFolder: fsPath => {
         ipcRenderer.send(CHANNEL_SHOW_ITEM_IN_FOLDER, fsPath);
     },
+
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
+    openWithSystemApp: location => {
+        ipcRenderer.send(CHANNEL_OPEN_WITH_SYSTEM_APP, location);
+    },
     attachSecurityToken: (endpoint: string) => ipcRenderer.invoke(CHANNEL_ATTACH_SECURITY_TOKEN, endpoint),
 
-    popup: async function (menu: MenuDto[], x: number, y: number, onClosed: () => void): Promise<number> {
+    popup: async function (menu: MenuDto[], x: number, y: number, onClosed: () => void, windowName?: string): Promise<number> {
         const menuId = nextMenuId++;
         const handlers = new Map<number, () => void>();
         commandHandlers.set(menuId, handlers);
-        const handle = await ipcRenderer.invoke(CHANNEL_OPEN_POPUP, menuId, convertMenu(menu, handlers), x, y);
+        const handle = await ipcRenderer.invoke(CHANNEL_OPEN_POPUP, menuId, convertMenu(menu, handlers), x, y, windowName);
         const closeListener = () => {
             ipcRenderer.removeListener(CHANNEL_ON_CLOSE_POPUP, closeListener);
             commandHandlers.delete(menuId);
@@ -105,6 +121,9 @@ const api: TheiaCoreAPI = {
     },
     setBackgroundColor: function (backgroundColor): void {
         ipcRenderer.send(CHANNEL_SET_BACKGROUND_COLOR, backgroundColor);
+    },
+    setTheme: function (theme): void {
+        ipcRenderer.send(CHANNEL_SET_THEME, theme);
     },
     minimize: function (): void {
         ipcRenderer.send(CHANNEL_MINIMIZE);
@@ -132,6 +151,10 @@ const api: TheiaCoreAPI = {
         return Disposable.create(() => ipcRenderer.off(CHANNEL_ABOUT_TO_CLOSE, h));
     },
 
+    setOpenUrlHandler(handler: (url: string) => Promise<boolean>): void {
+        openUrlHandler = handler;
+    },
+
     onWindowEvent: function (event: WindowEvent, handler: () => void): Disposable {
         const h = (_event: unknown, evt: WindowEvent) => {
             if (event === evt) {
@@ -142,7 +165,7 @@ const api: TheiaCoreAPI = {
         return Disposable.create(() => ipcRenderer.off(CHANNEL_ON_WINDOW_EVENT, h));
     },
     setCloseRequestHandler: function (handler: (stopReason: StopReason) => Promise<boolean>): void {
-        ipcRenderer.on(CHANNEL_REQUEST_CLOSE, async (event, stopReason, confirmChannel, cancelChannel) => {
+        ipcRenderer.on(CHANNEL_REQUEST_CLOSE, async (event: Electron.IpcRendererEvent, stopReason: StopReason, confirmChannel: string, cancelChannel: string) => {
             try {
                 if (await handler(stopReason)) {
                     event.sender.send(confirmChannel);
@@ -177,6 +200,9 @@ const api: TheiaCoreAPI = {
     toggleDevTools: function (): void {
         ipcRenderer.send(CHANNEL_TOGGLE_DEVTOOLS);
     },
+    openDevToolsForWindow: function (windowName: string): void {
+        ipcRenderer.send(CHANNEL_OPEN_DEVTOOLS_FOR_WINDOW, windowName);
+    },
     getZoomLevel: function (): Promise<number> {
         return ipcRenderer.invoke(CHANNEL_GET_ZOOM_LEVEL);
     },
@@ -196,7 +222,7 @@ const api: TheiaCoreAPI = {
         ipcRenderer.send(CHANNEL_TOGGLE_FULL_SCREEN);
     },
 
-    requestReload: () => ipcRenderer.send(CHANNEL_REQUEST_RELOAD),
+    requestReload: (newUrl?: string) => ipcRenderer.send(CHANNEL_REQUEST_RELOAD, newUrl),
     restart: () => ipcRenderer.send(CHANNEL_RESTART),
 
     applicationStateChanged: state => {
@@ -231,7 +257,7 @@ function createDisposableListener(channel: string, handler: (event: any, ...args
 
 export function preload(): void {
     console.log('exposing theia core electron api');
-    ipcRenderer.on(CHANNEL_INVOKE_MENU, (_, menuId: number, handlerId: number) => {
+    ipcRenderer.on(CHANNEL_INVOKE_MENU, (_: Electron.IpcRendererEvent, menuId: number, handlerId: number) => {
         const map = commandHandlers.get(menuId);
         if (map) {
             const handler = map.get(handlerId);

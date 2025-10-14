@@ -20,6 +20,7 @@ import URI from '@theia/core/lib/common/uri';
 import { Event, Disposable, TextDocumentContentChangeDelta, Reference, isObject } from '@theia/core/lib/common';
 import { Saveable, Navigatable, Widget } from '@theia/core/lib/browser';
 import { EditorDecoration } from './decorations/editor-decoration';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 
 export { Position, Range, Location };
 
@@ -27,7 +28,13 @@ export const TextEditorProvider = Symbol('TextEditorProvider');
 export type TextEditorProvider = (uri: URI) => Promise<TextEditor>;
 
 export interface TextEditorDocument extends lsp.TextDocument, Saveable, Disposable {
+    /**
+     * @param lineNumber 1-based
+     */
     getLineContent(lineNumber: number): string;
+    /**
+     * @param lineNumber 1-based
+     */
     getLineMaxColumn(lineNumber: number): number;
     /**
      * @since 1.8.0
@@ -207,15 +214,16 @@ export interface TextEditor extends Disposable, TextEditorSelection, Navigatable
     readonly node: HTMLElement;
 
     readonly uri: URI;
-    readonly isReadonly: boolean;
+    readonly isReadonly: boolean | MarkdownString;
+    readonly onDidChangeReadOnly: Event<boolean | MarkdownString>;
     readonly document: TextEditorDocument;
     readonly onDocumentContentChanged: Event<TextDocumentChangeEvent>;
 
     cursor: Position;
     readonly onCursorPositionChanged: Event<Position>;
 
-    selection: Range;
-    readonly onSelectionChanged: Event<Range>;
+    selection: Selection;
+    readonly onSelectionChanged: Event<Selection>;
 
     /**
      * The text editor should be revealed,
@@ -291,6 +299,18 @@ export interface TextEditor extends Disposable, TextEditorSelection, Navigatable
     setEncoding(encoding: string, mode: EncodingMode): void;
 
     readonly onEncodingChanged: Event<string>;
+
+    shouldDisplayDirtyDiff(): boolean;
+    /**
+     * This event is optional iff {@link shouldDisplayDirtyDiff} always returns the same result for this editor instance.
+     */
+    readonly onShouldDisplayDirtyDiffChanged?: Event<boolean>;
+
+    handleVisibilityChanged(nowVisible: boolean): void;
+}
+
+export interface Selection extends Range {
+    direction: 'ltr' | 'rtl';
 }
 
 export interface Dimension {

@@ -21,7 +21,7 @@ import * as os from 'os';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { RequestService } from '@theia/core/shared/@theia/request';
 import { RemoteSetupScriptService } from './remote-setup-script-service';
-import { RemotePlatform } from '../remote-types';
+import { RemotePlatform } from '@theia/core/lib/node/remote/remote-cli-contribution';
 import { OS } from '@theia/core';
 
 /**
@@ -29,7 +29,7 @@ import { OS } from '@theia/core';
  *
  * Native dependencies are compiled against this version.
  */
-export const REMOTE_NODE_VERSION = '18.17.0';
+export const REMOTE_NODE_VERSION = '22.17.0';
 
 @injectable()
 export class RemoteNodeSetupService {

@@ -15,7 +15,7 @@
 // *****************************************************************************
 
 import { CancellationToken, ContributionProvider, DisposableCollection, disposableTimeout, isOSX } from '@theia/core';
-import { PreferenceService } from '@theia/core/lib/browser';
+import { PreferenceService } from '@theia/core/lib/common';
 import { inject, injectable, interfaces, named, postConstruct } from '@theia/core/shared/inversify';
 import { IBufferRange, ILink, ILinkDecorations } from 'xterm';
 import { TerminalWidget } from './base/terminal-widget';
@@ -25,7 +25,7 @@ import { TerminalWidgetImpl } from './terminal-widget-impl';
 
 export const TerminalLinkProvider = Symbol('TerminalLinkProvider');
 export interface TerminalLinkProvider {
-    provideLinks(line: string, terminal: TerminalWidget, cancelationToken?: CancellationToken): Promise<TerminalLink[]>;
+    provideLinks(line: string, terminal: TerminalWidget, cancellationToken?: CancellationToken): Promise<TerminalLink[]>;
 }
 
 export const TerminalLink = Symbol('TerminalLink');
@@ -72,7 +72,7 @@ export class TerminalLinkProviderContribution implements TerminalContribution {
         const context = getLinkContext(terminal.getTerminal(), line);
 
         const linkProviderPromises: Promise<TerminalLink[]>[] = [];
-        for (const provider of this.terminalLinkContributionProvider.getContributions()) {
+        for (const provider of this.terminalLinkContributionProvider.getContributions(true)) {
             linkProviderPromises.push(provider.provideLinks(context.text, terminal));
         }
 

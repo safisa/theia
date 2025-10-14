@@ -27,12 +27,15 @@ import {
     Emitter,
     Event,
     ViewColumn,
-    OS
+    OS,
+    MAIN_MENU_BAR,
+    PreferenceService,
+    PreferenceScope
 } from '@theia/core/lib/common';
 import {
-    ApplicationShell, KeybindingContribution, KeyCode, Key, WidgetManager, PreferenceService,
+    ApplicationShell, KeybindingContribution, KeyCode, Key, WidgetManager,
     KeybindingRegistry, LabelProvider, WidgetOpenerOptions, StorageService, QuickInputService,
-    codicon, CommonCommands, FrontendApplicationContribution, OnWillStopAction, Dialog, ConfirmDialog, FrontendApplication, PreferenceScope, Widget
+    codicon, CommonCommands, FrontendApplicationContribution, OnWillStopAction, Dialog, ConfirmDialog, FrontendApplication, Widget, SHELL_TABBAR_CONTEXT_MENU
 } from '@theia/core/lib/browser';
 import { TabBarToolbarContribution, TabBarToolbarRegistry } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { TERMINAL_WIDGET_FACTORY_ID, TerminalWidgetFactoryOptions, TerminalWidgetImpl } from './terminal-widget-impl';
@@ -42,19 +45,18 @@ import { ContributedTerminalProfileStore, NULL_PROFILE, TerminalProfile, Termina
 import { UriAwareCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import { ShellTerminalServerProxy } from '../common/shell-terminal-protocol';
 import URI from '@theia/core/lib/common/uri';
-import { MAIN_MENU_BAR } from '@theia/core';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { ColorContribution } from '@theia/core/lib/browser/color-application-contribution';
 import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
-import { terminalAnsiColorMap } from './terminal-theme-service';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { FileStat } from '@theia/filesystem/lib/common/files';
 import { TerminalWatcher } from '../common/terminal-watcher';
 import { nls } from '@theia/core/lib/common/nls';
-import { Profiles, TerminalPreferences } from './terminal-preferences';
+import { Profiles, terminalAnsiColorMap, TerminalPreferences } from '../common/terminal-preferences';
 import { ShellTerminalProfile } from './shell-terminal-profile';
 import { VariableResolverService } from '@theia/variable-resolver/lib/browser';
+import { Color } from '@theia/core/lib/common/color';
 
 export namespace TerminalMenus {
     export const TERMINAL = [...MAIN_MENU_BAR, '7_terminal'];
@@ -67,6 +69,9 @@ export namespace TerminalMenus {
     export const TERMINAL_OPEN_EDITORS_CONTEXT_MENU = ['open-editors-context-menu', 'navigation'];
 
     export const TERMINAL_CONTEXT_MENU = ['terminal-context-menu'];
+    export const TERMINAL_CONTRIBUTIONS = [...TERMINAL_CONTEXT_MENU, '5_terminal_contributions'];
+
+    export const TERMINAL_TITLE_CONTRIBUTIONS = [...SHELL_TABBAR_CONTEXT_MENU, 'terminal_title_contributions'];
 }
 
 export namespace TerminalCommands {
@@ -307,7 +312,8 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
         } else {
             this.contributedProfileStore.registerTerminalProfile('SHELL', new ShellTerminalProfile(this, {
                 shellPath: await this.resolveShellPath('${SHELL}')!,
-                shellArgs: ['-l']
+                shellArgs: ['-l'],
+                iconClass: 'codicon codicon-terminal'
             }));
         }
 
@@ -731,9 +737,20 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
         menus.registerMenuAction([...TerminalMenus.TERMINAL_CONTEXT_MENU, '_4'], {
             commandId: TerminalCommands.KILL_TERMINAL.id
         });
+
+        menus.registerSubmenu(TerminalMenus.TERMINAL_CONTRIBUTIONS, '');
+
+        menus.registerSubmenu(TerminalMenus.TERMINAL_TITLE_CONTRIBUTIONS, '', { when: 'isTerminalTab' });
     }
 
     registerToolbarItems(toolbar: TabBarToolbarRegistry): void {
+        toolbar.registerItem({
+            id: TerminalCommands.NEW.id,
+            command: TerminalCommands.NEW.id,
+            icon: codicon('add'),
+            tooltip: TerminalCommands.NEW.label,
+            isVisible: w => this.withWidget(w, () => true),
+        });
         toolbar.registerItem({
             id: TerminalCommands.SPLIT.id,
             command: TerminalCommands.SPLIT.id,
@@ -1073,6 +1090,27 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
                 hcLight: 'editor.selectionBackground'
             },
             description: 'The selection background color of the terminal.'
+        });
+        colors.register({
+            id: 'terminal.inactiveSelectionBackground',
+            defaults: {
+                light: Color.transparent('terminal.selectionBackground', 0.5),
+                dark: Color.transparent('terminal.selectionBackground', 0.5),
+                hcDark: Color.transparent('terminal.selectionBackground', 0.7),
+                hcLight: Color.transparent('terminal.selectionBackground', 0.5),
+            },
+            description: 'The selection background color of the terminal when it does not have focus.'
+        });
+        colors.register({
+            id: 'terminal.selectionForeground',
+            defaults: {
+                light: undefined,
+                dark: undefined,
+                hcDark: '#000000',
+                hcLight: '#ffffff'
+            },
+            // eslint-disable-next-line max-len
+            description: 'The selection foreground color of the terminal. When this is null the selection foreground will be retained and have the minimum contrast ratio feature applied.'
         });
         colors.register({
             id: 'terminal.border',

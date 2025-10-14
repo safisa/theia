@@ -12,6 +12,7 @@
     "strictNullChecks": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
+    "importHelpers": true,
     "downlevelIteration": true,
     "resolveJsonModule": true,
     "module": "CommonJS",
@@ -21,7 +22,8 @@
     "lib": [
       "ES2019",
       "ES2020.Promise",
-      "DOM"
+      "DOM",
+      "DOM.AsyncIterable"
     ],
     "sourceMap": true
   }

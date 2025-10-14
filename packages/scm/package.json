@@ -1,23 +1,27 @@
 {
   "name": "@theia/scm",
-  "version": "1.45.0",
+  "version": "1.65.0",
   "description": "Theia - Source control Extension",
   "dependencies": {
-    "@theia/core": "1.45.0",
-    "@theia/editor": "1.45.0",
-    "@theia/filesystem": "1.45.0",
-    "@types/diff": "^3.2.2",
-    "diff": "^3.4.0",
+    "@theia/core": "1.65.0",
+    "@theia/editor": "1.65.0",
+    "@theia/filesystem": "1.65.0",
+    "@theia/monaco": "1.65.0",
+    "@theia/monaco-editor-core": "1.96.302",
+    "@types/diff": "^5.2.1",
+    "diff": "^5.2.0",
     "p-debounce": "^2.1.0",
-    "react-autosize-textarea": "^7.0.0",
-    "ts-md5": "^1.2.2"
+    "react-textarea-autosize": "^8.5.5",
+    "ts-md5": "^1.2.2",
+    "tslib": "^2.6.2"
   },
   "publishConfig": {
     "access": "public"
   },
   "theiaExtensions": [
     {
-      "frontend": "lib/browser/scm-frontend-module"
+      "frontend": "lib/browser/scm-frontend-module",
+      "backend": "lib/node/scm-backend-module"
     }
   ],
   "keywords": [
@@ -42,12 +46,14 @@
     "compile": "theiaext compile",
     "docs": "theiaext docs",
     "lint": "theiaext lint",
+    "test": "theiaext test",
     "watch": "theiaext watch"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "1.45.0"
+    "@theia/ext-scripts": "1.65.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"
-  }
+  },
+  "gitHead": "21358137e41342742707f660b8e222f940a27652"
 }

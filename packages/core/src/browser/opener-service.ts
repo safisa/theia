@@ -16,7 +16,8 @@
 
 import { named, injectable, inject } from 'inversify';
 import URI from '../common/uri';
-import { ContributionProvider, Prioritizeable, MaybePromise, Emitter, Event, Disposable } from '../common';
+import { ContributionProvider, Prioritizeable, MaybePromise, Emitter, Event, Disposable, PreferenceService } from '../common';
+import { match } from '../common/glob';
 
 export interface OpenerOptions {
 }
@@ -79,6 +80,12 @@ export interface OpenerService {
      * Add open handler i.e. for custom editors
      */
     addHandler?(openHandler: OpenHandler): Disposable;
+
+    /**
+     * Remove open handler
+     */
+    removeHandler?(openHandler: OpenHandler): void;
+
     /**
      * Event that fires when a new opener is added or removed.
      */
@@ -89,6 +96,17 @@ export async function open(openerService: OpenerService, uri: URI, options?: Ope
     const opener = await openerService.getOpener(uri, options);
     return opener.open(uri, options);
 }
+
+export function getDefaultHandler(uri: URI, preferenceService: PreferenceService): string | undefined {
+    const associations = preferenceService.get('workbench.editorAssociations', {});
+    const defaultHandler = Object.entries(associations).find(([key]) => match(key, uri.path.base))?.[1];
+    if (typeof defaultHandler === 'string') {
+        return defaultHandler;
+    }
+    return undefined;
+}
+
+export const defaultHandlerPriority = 100_000;
 
 @injectable()
 export class DefaultOpenerService implements OpenerService {
@@ -108,9 +126,13 @@ export class DefaultOpenerService implements OpenerService {
         this.onDidChangeOpenersEmitter.fire();
 
         return Disposable.create(() => {
-            this.customEditorOpenHandlers.splice(this.customEditorOpenHandlers.indexOf(openHandler), 1);
-            this.onDidChangeOpenersEmitter.fire();
+            this.removeHandler(openHandler);
         });
+    }
+
+    removeHandler(openHandler: OpenHandler): void {
+        this.customEditorOpenHandlers.splice(this.customEditorOpenHandlers.indexOf(openHandler), 1);
+        this.onDidChangeOpenersEmitter.fire();
     }
 
     async getOpener(uri: URI, options?: OpenerOptions): Promise<OpenHandler> {

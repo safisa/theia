@@ -4,14 +4,13 @@
 
 <img src='https://raw.githubusercontent.com/eclipse-theia/theia/master/logo/theia.svg?sanitize=true' alt='theia-ext-logo' width='100px' />
 
-<h2>ECLIPSE THEIA -EXT-SCRIPTS</h2>
+<h2>ECLIPSE THEIA - EXT-SCRIPTS</h2>
 
 <hr />
 
 </div>
 
 ## Description
-
 
 `theiaext` is a command line tool to run shared npm scripts in Theia packages.\
 For instance, if you want add a new `hello` script that prints `Hello World`:
@@ -66,5 +65,6 @@ For instance, if you want add a new `hello` script that prints `Hello World`:
 - [一 (Secondary) GNU General Public License, version 2 with the GNU Classpath Exception](https://projects.eclipse.org/license/secondary-gpl-2.0-cp)
 
 ## Trademark
+
 "Theia" is a trademark of the Eclipse Foundation
-https://www.eclipse.org/theia
+<https://www.eclipse.org/theia>

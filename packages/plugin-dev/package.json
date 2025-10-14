@@ -1,17 +1,18 @@
 {
   "name": "@theia/plugin-dev",
-  "version": "1.45.0",
+  "version": "1.65.0",
   "description": "Theia - Plugin Development Extension",
   "main": "lib/common/index.js",
   "typings": "lib/common/index.d.ts",
   "dependencies": {
-    "@theia/core": "1.45.0",
-    "@theia/debug": "1.45.0",
-    "@theia/filesystem": "1.45.0",
-    "@theia/output": "1.45.0",
-    "@theia/plugin-ext": "1.45.0",
-    "@theia/workspace": "1.45.0",
-    "ps-tree": "^1.2.0"
+    "@theia/core": "1.65.0",
+    "@theia/debug": "1.65.0",
+    "@theia/filesystem": "1.65.0",
+    "@theia/output": "1.65.0",
+    "@theia/plugin-ext": "1.65.0",
+    "@theia/workspace": "1.65.0",
+    "ps-tree": "^1.2.0",
+    "tslib": "^2.6.2"
   },
   "publishConfig": {
     "access": "public"
@@ -48,9 +49,10 @@
     "watch": "theiaext watch"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "1.45.0"
+    "@theia/ext-scripts": "1.65.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"
-  }
+  },
+  "gitHead": "21358137e41342742707f660b8e222f940a27652"
 }

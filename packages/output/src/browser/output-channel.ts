@@ -14,7 +14,6 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import * as PQueue from 'p-queue';
 import { injectable, inject } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
 import { Deferred } from '@theia/core/lib/common/promise-util';
@@ -24,9 +23,10 @@ import { MonacoEditorModel } from '@theia/monaco/lib/browser/monaco-editor-model
 import { MonacoTextModelService } from '@theia/monaco/lib/browser/monaco-text-model-service';
 import { OutputUri } from '../common/output-uri';
 import { OutputResource } from '../browser/output-resource';
-import { OutputPreferences } from './output-preferences';
+import { OutputPreferences } from '../common/output-preferences';
 import { IReference } from '@theia/monaco-editor-core/esm/vs/base/common/lifecycle';
 import * as monaco from '@theia/monaco-editor-core';
+import PQueue from 'p-queue';
 
 @injectable()
 export class OutputChannelManager implements Disposable, ResourceResolver {
@@ -77,10 +77,10 @@ export class OutputChannelManager implements Disposable, ResourceResolver {
         const channel = this.createChannel(resource);
         this.channels.set(name, channel);
         this.toDisposeOnChannelDeletion.set(name, this.registerListeners(channel));
-        this.channelAddedEmitter.fire(channel);
         if (!this.selectedChannel) {
             this.selectedChannel = channel;
         }
+        this.channelAddedEmitter.fire(channel);
         return channel;
     }
 

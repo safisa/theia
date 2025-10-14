@@ -21,7 +21,9 @@ import * as drivelist from 'drivelist';
 import { pathExists, mkdir } from 'fs-extra';
 import { EnvVariable, EnvVariablesServer } from '../../common/env-variables';
 import { isWindows } from '../../common/os';
-import { FileUri } from '../file-uri';
+import { FileUri } from '../../common/file-uri';
+import { BackendApplicationPath } from '../backend-application';
+import { BackendApplicationConfigProvider } from '../backend-application-config-provider';
 
 @injectable()
 export class EnvVariablesServerImpl implements EnvVariablesServer {
@@ -45,25 +47,26 @@ export class EnvVariablesServerImpl implements EnvVariablesServer {
     }
 
     protected async createConfigDirUri(): Promise<string> {
-        let dataFolderPath: string = '';
-        if (process.env.THEIA_APP_PROJECT_PATH) {
-            dataFolderPath = join(process.env.THEIA_APP_PROJECT_PATH, 'data');
+        if (process.env.THEIA_CONFIG_DIR) {
+            // this has been explicitly set by the user, so we do not override its value
+            return FileUri.create(process.env.THEIA_CONFIG_DIR).toString();
         }
+
+        const dataFolderPath = join(BackendApplicationPath, 'data');
         const userDataPath = join(dataFolderPath, 'user-data');
         const dataFolderExists = this.pathExistenceCache[dataFolderPath] ??= await pathExists(dataFolderPath);
+        let theiaConfigDir: string;
         if (dataFolderExists) {
             const userDataExists = this.pathExistenceCache[userDataPath] ??= await pathExists(userDataPath);
-            if (userDataExists) {
-                process.env.THEIA_CONFIG_DIR = userDataPath;
-            } else {
+            if (!userDataExists) {
                 await mkdir(userDataPath);
-                process.env.THEIA_CONFIG_DIR = userDataPath;
                 this.pathExistenceCache[userDataPath] = true;
             }
+            theiaConfigDir = userDataPath;
         } else {
-            process.env.THEIA_CONFIG_DIR = join(homedir(), '.theia');
+            theiaConfigDir = join(homedir(), BackendApplicationConfigProvider.get().configurationFolder);
         }
-        return FileUri.create(process.env.THEIA_CONFIG_DIR).toString();
+        return FileUri.create(theiaConfigDir).toString();
     }
 
     async getExecPath(): Promise<string> {

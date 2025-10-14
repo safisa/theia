@@ -21,7 +21,7 @@
 
 /* eslint-disable no-null/no-null */
 
-import { UUID } from '@theia/core/shared/@phosphor/coreutils';
+import { UUID } from '@theia/core/shared/@lumino/coreutils';
 import { illegalArgument } from '../common/errors';
 import type * as theia from '@theia/plugin';
 import { URI as CodeURI, UriComponents } from '@theia/core/shared/vscode-uri';
@@ -79,7 +79,7 @@ export class URI extends CodeURI implements theia.Uri {
      */
     static override revive(data: UriComponents | CodeURI): URI;
     static override revive(data: UriComponents | CodeURI | null): URI | null;
-    static override revive(data: UriComponents | CodeURI | undefined): URI | undefined
+    static override revive(data: UriComponents | CodeURI | undefined): URI | undefined;
     static override revive(data: UriComponents | CodeURI | undefined | null): URI | undefined | null {
         const uri = CodeURI.revive(data);
         return uri ? new URI(uri) : undefined;
@@ -153,7 +153,8 @@ export enum StatusBarAlignment {
 export enum TextEditorLineNumbersStyle {
     Off = 0,
     On = 1,
-    Relative = 2
+    Relative = 2,
+    Interval = 3
 }
 
 /**
@@ -724,7 +725,7 @@ export class SnippetString {
 
 @es5ClassCompat
 export class ThemeColor {
-    constructor(public id: string) { }
+    constructor(public readonly id: string) { }
 }
 
 @es5ClassCompat
@@ -742,6 +743,9 @@ export class ThemeIcon {
 export namespace ThemeIcon {
     export function is(item: unknown): item is ThemeIcon {
         return isObject(item) && 'id' in item;
+    }
+    export function get(item: unknown): ThemeIcon | undefined {
+        return is(item) ? item : undefined;
     }
 }
 
@@ -881,7 +885,7 @@ export class TextEdit {
 
     protected _range: Range;
     protected _newText: string;
-    protected _newEol: EndOfLine;
+    protected _newEol: EndOfLine | undefined;
 
     get range(): Range {
         return this._range;
@@ -905,7 +909,7 @@ export class TextEdit {
         this._newText = value;
     }
 
-    get newEol(): EndOfLine {
+    get newEol(): EndOfLine | undefined {
         return this._newEol;
     }
 
@@ -1337,6 +1341,7 @@ export class NotebookRange implements theia.NotebookRange {
 export class SnippetTextEdit implements theia.SnippetTextEdit {
     range: Range;
     snippet: SnippetString;
+    keepWhitespace?: boolean;
 
     static isSnippetTextEdit(thing: unknown): thing is SnippetTextEdit {
         return thing instanceof SnippetTextEdit || isObject<SnippetTextEdit>(thing)
@@ -1593,6 +1598,30 @@ export class DocumentHighlight {
     }
 }
 
+@es5ClassCompat
+export class MultiDocumentHighlight {
+
+    /**
+     * The URI of the document containing the highlights.
+     */
+    uri: URI;
+
+    /**
+     * The highlights for the document.
+     */
+    highlights: DocumentHighlight[];
+
+    /**
+     * Creates a new instance of MultiDocumentHighlight.
+     * @param uri The URI of the document containing the highlights.
+     * @param highlights The highlights for the document.
+     */
+    constructor(uri: URI, highlights: DocumentHighlight[]) {
+        this.uri = uri;
+        this.highlights = highlights;
+    }
+}
+
 export type Definition = Location | Location[];
 
 @es5ClassCompat
@@ -1617,16 +1646,37 @@ export class DocumentLink {
 }
 
 @es5ClassCompat
+export class DocumentDropOrPasteEditKind {
+    static readonly Empty: DocumentDropOrPasteEditKind = new DocumentDropOrPasteEditKind('');
+    static readonly Text: DocumentDropOrPasteEditKind = new DocumentDropOrPasteEditKind('text');
+    static readonly TextUpdateImports: DocumentDropOrPasteEditKind = new DocumentDropOrPasteEditKind('updateImports');
+
+    private static sep = '.';
+
+    constructor(
+        public readonly value: string
+    ) { }
+
+    public append(...parts: string[]): DocumentDropOrPasteEditKind {
+        return new DocumentDropOrPasteEditKind((this.value ? [this.value, ...parts] : parts).join(DocumentDropOrPasteEditKind.sep));
+    }
+
+    public intersects(other: DocumentDropOrPasteEditKind): boolean {
+        return this.contains(other) || other.contains(this);
+    }
+
+    public contains(other: DocumentDropOrPasteEditKind): boolean {
+        return this.value === other.value || other.value.startsWith(this.value + DocumentDropOrPasteEditKind.sep);
+    }
+}
+
+@es5ClassCompat
 export class DocumentDropEdit {
-
-    id?: string;
-
-    priority?: number;
-
-    label?: string;
-
+    title?: string;
+    kind: DocumentDropOrPasteEditKind;
+    handledMimeType?: string;
+    yieldTo?: ReadonlyArray<DocumentDropOrPasteEditKind>;
     insertText: string | SnippetString;
-
     additionalEdit?: WorkspaceEdit;
 
     constructor(insertText: string | SnippetString) {
@@ -1748,8 +1798,6 @@ export interface WorkspaceEditMetadata {
     label: string;
     description?: string;
     iconPath?: {
-        id: string;
-    } | {
         light: URI;
         dark: URI;
     } | ThemeIcon;
@@ -1845,13 +1893,13 @@ export class WorkspaceEdit implements theia.WorkspaceEdit {
     }
 
     set(uri: URI, edits: ReadonlyArray<TextEdit | SnippetTextEdit>): void;
-    set(uri: URI, edits: ReadonlyArray<[TextEdit | SnippetTextEdit, theia.WorkspaceEditEntryMetadata]>): void;
+    set(uri: URI, edits: ReadonlyArray<[TextEdit | SnippetTextEdit, theia.WorkspaceEditEntryMetadata | undefined]>): void;
     set(uri: URI, edits: ReadonlyArray<NotebookEdit>): void;
-    set(uri: URI, edits: ReadonlyArray<[NotebookEdit, theia.WorkspaceEditEntryMetadata]>): void;
+    set(uri: URI, edits: ReadonlyArray<[NotebookEdit, theia.WorkspaceEditEntryMetadata | undefined]>): void;
 
     set(uri: URI, edits: ReadonlyArray<TextEdit | SnippetTextEdit
-        | NotebookEdit | [NotebookEdit, theia.WorkspaceEditEntryMetadata]
-        | [TextEdit | SnippetTextEdit, theia.WorkspaceEditEntryMetadata]>): void {
+        | NotebookEdit | [NotebookEdit, theia.WorkspaceEditEntryMetadata | undefined]
+        | [TextEdit | SnippetTextEdit, theia.WorkspaceEditEntryMetadata | undefined]>): void {
         if (!edits) {
             // remove all text edits for `uri`
             for (let i = 0; i < this._edits.length; i++) {
@@ -2039,8 +2087,8 @@ export class TreeItem {
         readonly accessibilityInformation?: AccessibilityInformation
     };
 
-    constructor(label: string | theia.TreeItemLabel, collapsibleState?: theia.TreeItemCollapsibleState)
-    constructor(resourceUri: URI, collapsibleState?: theia.TreeItemCollapsibleState)
+    constructor(label: string | theia.TreeItemLabel, collapsibleState?: theia.TreeItemCollapsibleState);
+    constructor(resourceUri: URI, collapsibleState?: theia.TreeItemCollapsibleState);
     constructor(arg1: string | theia.TreeItemLabel | URI, public collapsibleState: theia.TreeItemCollapsibleState = TreeItemCollapsibleState.None) {
         if (arg1 instanceof URI) {
             this.resourceUri = arg1;
@@ -2984,6 +3032,14 @@ export class FunctionBreakpoint extends Breakpoint {
     }
 }
 
+export class DebugThread implements theia.DebugThread {
+    constructor(readonly session: theia.DebugSession, readonly threadId: number) { }
+}
+
+export class DebugStackFrame implements theia.DebugStackFrame {
+    constructor(readonly session: theia.DebugSession, readonly threadId: number, readonly frameId: number) { }
+}
+
 @es5ClassCompat
 export class Color {
     readonly red: number;
@@ -3285,6 +3341,7 @@ export class TestRunRequest implements theia.TestRunRequest {
         public readonly exclude: theia.TestItem[] | undefined = undefined,
         public readonly profile: theia.TestRunProfile | undefined = undefined,
         public readonly continuous: boolean | undefined = undefined,
+        public readonly preserveFocus: boolean = true
     ) { }
 }
 
@@ -3294,6 +3351,7 @@ export class TestMessage implements theia.TestMessage {
     public actualOutput?: string;
     public location?: theia.Location;
     public contextValue?: string;
+    public stackTrace?: theia.TestMessageStackFrame[] | undefined;
 
     public static diff(message: string | theia.MarkdownString, expected: string, actual: string): theia.TestMessage {
         const msg = new TestMessage(message);
@@ -3304,6 +3362,81 @@ export class TestMessage implements theia.TestMessage {
 
     constructor(public message: string | theia.MarkdownString) { }
 }
+
+@es5ClassCompat
+export class TestCoverageCount {
+    constructor(public covered: number, public total: number) { }
+}
+
+export class TestMessageStackFrame implements theia.TestMessageStackFrame {
+    constructor(
+        public label: string,
+        public uri?: theia.Uri,
+        public position?: Position
+    ) { }
+}
+
+@es5ClassCompat
+export class FileCoverage {
+
+    detailedCoverage?: theia.FileCoverageDetail[];
+
+    static fromDetails(uri: theia.Uri, details: theia.FileCoverageDetail[]): FileCoverage {
+        const statements = new TestCoverageCount(0, 0);
+        const branches = new TestCoverageCount(0, 0);
+        const decl = new TestCoverageCount(0, 0);
+
+        for (const detail of details) {
+            if (detail instanceof StatementCoverage) {
+                statements.total += 1;
+                statements.covered += detail.executed ? 1 : 0;
+
+                for (const branch of detail.branches) {
+                    branches.total += 1;
+                    branches.covered += branch.executed ? 1 : 0;
+                }
+            } else {
+                decl.total += 1;
+                decl.covered += detail.executed ? 1 : 0;
+            }
+        }
+
+        const coverage = new FileCoverage(
+            uri,
+            statements,
+            branches.total > 0 ? branches : undefined,
+            decl.total > 0 ? decl : undefined,
+        );
+
+        coverage.detailedCoverage = details;
+
+        return coverage;
+    }
+
+    constructor(
+        public uri: theia.Uri,
+        public statementCoverage: TestCoverageCount,
+        public branchCoverage?: TestCoverageCount,
+        public declarationCoverage?: TestCoverageCount,
+        public includesTests?: theia.TestItem[],
+    ) { }
+}
+
+@es5ClassCompat
+export class StatementCoverage implements theia.StatementCoverage {
+    constructor(public executed: number | boolean, public location: Position | Range, public branches: BranchCoverage[] = []) { }
+}
+
+export class BranchCoverage implements theia.BranchCoverage {
+    constructor(public executed: number | boolean, public location?: Position | Range, public label?: string) { }
+}
+
+@es5ClassCompat
+export class DeclarationCoverage implements theia.DeclarationCoverage {
+    constructor(public name: string, public executed: number | boolean, public location: Position | Range) { }
+}
+
+export type FileCoverageDetail = StatementCoverage | DeclarationCoverage;
 
 @es5ClassCompat
 export class TimelineItem {
@@ -3649,19 +3782,61 @@ export class InteractiveWindowInput {
 // #endregion
 
 // #region DocumentPaste
+export class DocumentPasteEditKind {
+    static Empty: DocumentPasteEditKind;
+    static Text: DocumentPasteEditKind;
+    static TextUpdateImports: DocumentPasteEditKind;
+
+    constructor(public readonly value: string) { }
+
+    /** @stubbed */
+    append(...parts: string[]): CodeActionKind {
+        return CodeActionKind.Empty;
+    };
+
+    /** @stubbed */
+    intersects(other: CodeActionKind): boolean {
+        return false;
+    }
+
+    /** @stubbed */
+    contains(other: CodeActionKind): boolean {
+        return false;
+    }
+}
+DocumentPasteEditKind.Empty = new DocumentPasteEditKind('');
+DocumentPasteEditKind.Text = new DocumentDropOrPasteEditKind('text');
+DocumentPasteEditKind.TextUpdateImports = DocumentDropOrPasteEditKind.Text.append('updateImports');
+
 @es5ClassCompat
 export class DocumentPasteEdit {
-    constructor(insertText: string | SnippetString, id: string, label: string) {
+    constructor(insertText: string | SnippetString, title: string, kind: DocumentDropOrPasteEditKind) {
         this.insertText = insertText;
-        this.id = id;
-        this.label = label;
+        this.title = title;
+        this.kind = kind;
     }
+    title: string;
+    kind: DocumentDropOrPasteEditKind;
     insertText: string | SnippetString;
     additionalEdit?: WorkspaceEdit;
-    id: string;
-    label: string;
-    priority?: number;
+    yieldTo?: ReadonlyArray<DocumentDropOrPasteEditKind>;
 }
+
+/**
+ * The reason why paste edits were requested.
+ */
+export enum DocumentPasteTriggerKind {
+    /**
+     * Pasting was requested as part of a normal paste operation.
+     */
+    Automatic = 0,
+
+    /**
+     * Pasting was requested by the user with the `paste as` command.
+     */
+    PasteAs = 1,
+}
+
 // #endregion
 
 // #region DocumentPaste
@@ -3672,16 +3847,59 @@ export enum EditSessionIdentityMatch {
 }
 // #endregion
 
+// #region terminalCompletionProvider
+export class TerminalCompletionList<T extends theia.TerminalCompletionItem> {
+
+    resourceRequestConfig?: theia.TerminalResourceRequestConfig;
+
+    items: T[];
+
+    /**
+     * Creates a new completion list.
+     *
+     * @param items The completion items.
+     * @param resourceRequestConfig Indicates which resources should be shown as completions for the cwd of the terminal.
+     * @stubbed
+     */
+    constructor(items?: T[], resourceRequestConfig?: theia.TerminalResourceRequestConfig) {
+    }
+}
+
+export enum TerminalCompletionItemKind {
+    File = 0,
+    Folder = 1,
+    Method = 2,
+    Alias = 3,
+    Argument = 4,
+    Option = 5,
+    OptionValue = 6,
+    Flag = 7,
+    SymbolicLinkFile = 8,
+    SymbolicLinkFolder = 9,
+    Commit = 10,
+    Branch = 11,
+    Tag = 12,
+    Stash = 13,
+    Remote = 14,
+    PullRequest = 15,
+    PullRequestDone = 16,
+}
+// #endregion
+
 // #region terminalQuickFixProvider
-export class TerminalQuickFixExecuteTerminalCommand {
+export class TerminalQuickFixTerminalCommand {
     /**
      * The terminal command to run
      */
     terminalCommand: string;
     /**
+     * Whether the command should be executed or just inserted (default)
+     */
+    shouldExecute?: boolean;
+    /**
      * @stubbed
      */
-    constructor(terminalCommand: string) { }
+    constructor(terminalCommand: string, shouldExecute?: boolean) { }
 }
 export class TerminalQuickFixOpener {
     /**
@@ -3694,3 +3912,448 @@ export class TerminalQuickFixOpener {
     constructor(uri: theia.Uri) { }
 }
 
+// #region Chat
+
+/**
+ * @stubbed
+ */
+export class ChatRequestTurn {
+    readonly prompt: string;
+    readonly participant: string;
+    readonly command?: string;
+    readonly references: theia.ChatPromptReference[];
+    readonly toolReferences: readonly theia.ChatLanguageModelToolReference[];
+    private constructor(prompt: string, command: string | undefined, references: theia.ChatPromptReference[], participant: string,
+        toolReferences: theia.ChatLanguageModelToolReference[]) {
+        this.prompt = prompt;
+        this.command = command;
+        this.participant = participant;
+        this.references = references;
+        this.toolReferences = toolReferences;
+    };
+}
+
+/**
+ * @stubbed
+ */
+export class ChatResponseTurn {
+    readonly command?: string;
+
+    private constructor(readonly response: ReadonlyArray<theia.ChatResponseMarkdownPart | theia.ChatResponseFileTreePart | theia.ChatResponseAnchorPart
+        | theia.ChatResponseCommandButtonPart>, readonly result: theia.ChatResult, readonly participant: string) { }
+}
+
+/**
+ * @stubbed
+ */
+export class ChatResponseAnchorPart {
+    value: URI | Location;
+    title?: string;
+
+    constructor(value: URI | Location, title?: string) { }
+}
+
+/**
+ * @stubbed
+ */
+export class ChatResponseProgressPart {
+    value: string;
+
+    constructor(value: string) { }
+}
+
+/**
+ * @stubbed
+ */
+export class ChatResponseReferencePart {
+    value: URI | Location;
+    iconPath?: URI | ThemeIcon | { light: URI; dark: URI; };
+
+    constructor(value: URI | theia.Location, iconPath?: URI | ThemeIcon | {
+        light: URI;
+        dark: URI;
+    }) { }
+}
+
+/**
+ * @stubbed
+ */
+export class ChatResponseCommandButtonPart {
+    value: theia.Command;
+
+    constructor(value: theia.Command) { }
+}
+
+/**
+ * @stubbed
+ */
+export class ChatResponseMarkdownPart {
+    value: theia.MarkdownString;
+
+    constructor(value: string | theia.MarkdownString) {
+    }
+}
+
+/**
+ * @stubbed
+ */
+export class ChatResponseFileTreePart {
+    value: theia.ChatResponseFileTree[];
+    baseUri: URI;
+
+    constructor(value: theia.ChatResponseFileTree[], baseUri: URI) { }
+}
+
+export type ChatResponsePart = ChatResponseMarkdownPart | ChatResponseFileTreePart | ChatResponseAnchorPart
+    | ChatResponseProgressPart | ChatResponseReferencePart | ChatResponseCommandButtonPart;
+
+export enum ChatResultFeedbackKind {
+    Unhelpful = 0,
+    Helpful = 1,
+}
+
+export enum LanguageModelChatMessageRole {
+    User = 1,
+    Assistant = 2
+}
+
+/**
+ * @stubbed
+ */
+export class LanguageModelChatMessage {
+    static User(content: string | (LanguageModelTextPart | LanguageModelToolResultPart)[], name?: string): LanguageModelChatMessage {
+        return new LanguageModelChatMessage(LanguageModelChatMessageRole.User, content, name);
+    }
+
+    static Assistant(content: string | (LanguageModelTextPart | LanguageModelToolResultPart)[], name?: string): LanguageModelChatMessage {
+        return new LanguageModelChatMessage(LanguageModelChatMessageRole.Assistant, content, name);
+    }
+
+    constructor(public role: LanguageModelChatMessageRole, public content: string | LanguageModelInputPart[],
+        public name?: string) { }
+}
+
+/**
+ * The various message types which a {@linkcode LanguageModelChatProvider} can emit in the chat response stream
+ */
+export type LanguageModelResponsePart = LanguageModelTextPart | LanguageModelToolResultPart | LanguageModelToolCallPart;
+
+/**
+ * The various message types which can be sent via {@linkcode LanguageModelChat.sendRequest } and processed by a {@linkcode LanguageModelChatProvider}
+ */
+export type LanguageModelInputPart = LanguageModelTextPart | LanguageModelToolResultPart | LanguageModelToolCallPart;
+
+export class LanguageModelError extends Error {
+
+    static NoPermissions(message?: string): LanguageModelError {
+        return new LanguageModelError(message, LanguageModelError.NoPermissions.name);
+    }
+
+    static Blocked(message?: string): LanguageModelError {
+        return new LanguageModelError(message, LanguageModelError.Blocked.name);
+    }
+
+    static NotFound(message?: string): LanguageModelError {
+        return new LanguageModelError(message, LanguageModelError.NotFound.name);
+    }
+
+    readonly code: string;
+
+    constructor(message?: string, code?: string) {
+        super(message);
+        this.name = 'LanguageModelError';
+        this.code = code ?? '';
+    }
+}
+
+export enum LanguageModelChatToolMode {
+    Auto = 1,
+    Required = 2
+}
+
+/**
+ * @stubbed
+ */
+export class LanguageModelToolCallPart {
+    callId: string;
+    name: string;
+    input: object;
+
+    constructor(callId: string, name: string, input: object) { }
+}
+
+/**
+ * @stubbed
+ */
+export class LanguageModelToolResultPart {
+    callId: string;
+    content: (theia.LanguageModelTextPart | theia.LanguageModelPromptTsxPart | unknown)[];
+
+    constructor(callId: string, content: (theia.LanguageModelTextPart | theia.LanguageModelPromptTsxPart | unknown)[]) { }
+}
+
+/**
+ * @stubbed
+ */
+export class LanguageModelTextPart {
+    value: string;
+    constructor(value: string) { }
+}
+
+/**
+ * @stubbed
+ */
+export class LanguageModelToolResult {
+    content: (theia.LanguageModelTextPart | theia.LanguageModelPromptTsxPart | unknown)[];
+
+    constructor(content: (theia.LanguageModelTextPart | theia.LanguageModelPromptTsxPart)[]) { }
+}
+
+/**
+ * @stubbed
+ */
+export class LanguageModelPromptTsxPart {
+    value: unknown;
+
+    constructor(value: unknown) { }
+}
+
+/**
+ * @stubbed
+ */
+export interface ProvideLanguageModelChatResponseOptions {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    readonly modelOptions?: { readonly [name: string]: any };
+    readonly tools?: readonly theia.LanguageModelChatTool[];
+    readonly toolMode: LanguageModelChatToolMode;
+}
+
+/**
+ * @stubbed
+ */
+export interface LanguageModelChatInformation {
+    readonly id: string;
+    readonly name: string;
+    readonly family: string;
+    readonly tooltip?: string;
+    readonly detail?: string;
+    readonly version: string;
+    readonly maxInputTokens: number;
+    readonly maxOutputTokens: number;
+    readonly capabilities: {
+        readonly imageInput?: boolean;
+        readonly toolCalling?: boolean | number;
+    };
+}
+
+/**
+ * @stubbed
+ */
+export interface LanguageModelChatRequestMessage {
+    readonly role: LanguageModelChatMessageRole;
+    readonly content: ReadonlyArray<LanguageModelInputPart | unknown>;
+    readonly name: string | undefined;
+}
+
+/**
+ * @stubbed
+ */
+export interface LanguageModelChatProvider<T extends LanguageModelChatInformation = LanguageModelChatInformation> {
+    readonly onDidChangeLanguageModelChatInformation?: theia.Event<void>;
+
+    provideLanguageModelChatInformation(options: PrepareLanguageModelChatModelOptions, token: theia.CancellationToken): theia.ProviderResult<T[]>;
+
+    provideLanguageModelChatResponse(model: T, messages: readonly theia.LanguageModelChatRequestMessage[],
+        options: ProvideLanguageModelChatResponseOptions, progress: Progress<LanguageModelResponsePart>, token: theia.CancellationToken): Thenable<void>;
+
+    provideTokenCount(model: T, text: string | LanguageModelChatRequestMessage, token: theia.CancellationToken): Thenable<number>;
+}
+
+/**
+ * @stubbed
+ */
+export interface PrepareLanguageModelChatModelOptions {
+    readonly silent: boolean;
+}
+
+// #endregion
+
+// #region Port Attributes
+
+export enum PortAutoForwardAction {
+    Notify = 1,
+    OpenBrowser = 2,
+    OpenPreview = 3,
+    Silent = 4,
+    Ignore = 5
+}
+
+export class PortAttributes {
+    constructor(public autoForwardAction: PortAutoForwardAction) {
+    }
+}
+
+// #endregion
+
+// #region Debug Visualization
+
+export class DebugVisualization {
+    iconPath?: URI | { light: URI; dark: URI } | ThemeIcon;
+    visualization?: theia.Command | { treeId: string };
+
+    constructor(public name: string) {
+    }
+}
+
+// #endregion
+
+// #region Terminal Shell Integration
+
+export enum TerminalShellExecutionCommandLineConfidence {
+    Low = 0,
+    Medium = 1,
+    High = 2
+}
+
+// #endregion
+
+/**
+ * McpStdioServerDefinition represents an MCP server available by running
+ * a local process and operating on its stdin and stdout streams. The process
+ * will be spawned as a child process of the extension host and by default
+ * will not run in a shell environment.
+ */
+export class McpStdioServerDefinition {
+    /**
+     * The human-readable name of the server.
+     */
+    readonly label: string;
+
+    /**
+     * The working directory used to start the server.
+     */
+    cwd?: URI;
+
+    /**
+     * The command used to start the server. Node.js-based servers may use
+     * `process.execPath` to use the editor's version of Node.js to run the script.
+     */
+    command: string;
+
+    /**
+     * Additional command-line arguments passed to the server.
+     */
+    args?: string[];
+
+    /**
+     * Optional additional environment information for the server. Variables
+     * in this environment will overwrite or remove (if null) the default
+     * environment variables of the editor's extension host.
+     */
+    env?: Record<string, string | number | null>;
+
+    /**
+     * Optional version identification for the server. If this changes, the
+     * editor will indicate that tools have changed and prompt to refresh them.
+     */
+    version?: string;
+
+    /**
+     * @param label The human-readable name of the server.
+     * @param command The command used to start the server.
+     * @param args Additional command-line arguments passed to the server.
+     * @param env Optional additional environment information for the server.
+     * @param version Optional version identification for the server.
+     */
+    constructor(label: string, command: string, args?: string[], env?: Record<string, string | number | null>, version?: string) {
+        this.label = label;
+        this.command = command;
+        this.args = args;
+        this.env = env;
+        this.version = version;
+    }
+}
+
+/**
+ * McpHttpServerDefinition represents an MCP server available using the
+ * Streamable HTTP transport.
+ */
+export class McpHttpServerDefinition {
+    /**
+     * The human-readable name of the server.
+     */
+    readonly label: string;
+
+    /**
+     * The URI of the server. The editor will make a POST request to this URI
+     * to begin each session.
+     */
+    uri: URI;
+
+    /**
+     * Optional additional heads included with each request to the server.
+     */
+    headers?: Record<string, string>;
+
+    /**
+     * Optional version identification for the server. If this changes, the
+     * editor will indicate that tools have changed and prompt to refresh them.
+     */
+    version?: string;
+
+    /**
+     * @param label The human-readable name of the server.
+     * @param uri The URI of the server.
+     * @param headers Optional additional heads included with each request to the server.
+     */
+    constructor(label: string, uri: URI, headers?: Record<string, string>, version?: string) {
+        this.label = label;
+        this.uri = uri;
+        this.headers = headers;
+        this.version = version;
+    };
+}
+
+/**
+ * Definitions that describe different types of Model Context Protocol servers,
+ * which can be returned from the {@link McpServerDefinitionProvider}.
+ */
+export type McpServerDefinition = McpStdioServerDefinition | McpHttpServerDefinition;
+
+// #region textEditorDiffInformation
+
+export enum TextEditorChangeKind {
+    Addition = 1,
+    Deletion = 2,
+    Modification = 3
+}
+
+export interface TextEditorLineRange {
+    readonly startLineNumber: number;
+    readonly endLineNumberExclusive: number;
+}
+
+export interface TextEditorChange {
+    readonly original: TextEditorLineRange;
+    readonly modified: TextEditorLineRange;
+    readonly kind: TextEditorChangeKind;
+}
+
+export interface TextEditorDiffInformation {
+    readonly documentVersion: number;
+    readonly original: theia.Uri | undefined;
+    readonly modified: theia.Uri;
+    readonly changes: readonly TextEditorChange[];
+    readonly isStale: boolean;
+}
+
+export interface TextEditorDiffInformationChangeEvent {
+    readonly textEditor: TextEditor;
+    readonly diffInformation: TextEditorDiffInformation[] | undefined;
+}
+
+export interface TextEditor {
+    readonly diffInformation: TextEditorDiffInformation[] | undefined;
+}
+
+// #endregion

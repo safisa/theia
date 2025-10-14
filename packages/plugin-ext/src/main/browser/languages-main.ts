@@ -42,7 +42,7 @@ import { injectable, inject } from '@theia/core/shared/inversify';
 import {
     SerializedDocumentFilter, MarkerData, Range, RelatedInformation,
     MarkerSeverity, DocumentLink, WorkspaceSymbolParams, CodeAction, CompletionDto,
-    CodeActionProviderDocumentation, InlayHint, InlayHintLabelPart, CodeActionContext, DocumentDropEditProviderMetadata
+    CodeActionProviderDocumentation, InlayHint, InlayHintLabelPart, CodeActionContext, DocumentDropEditProviderMetadata, SignatureHelpContext
 } from '../../common/plugin-api-rpc-model';
 import { RPCProtocol } from '../../common/rpc-protocol';
 import { MonacoLanguages, WorkspaceSymbolProvider } from '@theia/monaco/lib/browser/monaco-languages';
@@ -73,8 +73,8 @@ import { EditorLanguageStatusService, LanguageStatus as EditorLanguageStatus } f
 import { LanguageSelector, RelativePattern } from '@theia/editor/lib/common/language-selector';
 import { ILanguageFeaturesService } from '@theia/monaco-editor-core/esm/vs/editor/common/services/languageFeatures';
 import {
-    DocumentOnDropEdit,
-    DocumentOnDropEditProvider,
+    DocumentDropEditProvider,
+    DocumentDropEditsSession,
     EvaluatableExpression,
     EvaluatableExpressionProvider,
     InlineValue,
@@ -82,10 +82,9 @@ import {
     InlineValuesProvider
 } from '@theia/monaco-editor-core/esm/vs/editor/common/languages';
 import { ITextModel } from '@theia/monaco-editor-core/esm/vs/editor/common/model';
-import { CodeActionTriggerKind, SnippetString } from '../../plugin/types-impl';
-import { DataTransfer } from './data-transfer/data-transfer-type-converters';
-import { VSDataTransfer } from '@theia/monaco-editor-core/esm/vs/base/common/dataTransfer';
-import { FileUploadService } from '@theia/filesystem/lib/browser/file-upload-service';
+import { CodeActionTriggerKind } from '../../plugin/types-impl';
+import { IReadonlyVSDataTransfer } from '@theia/monaco-editor-core/esm/vs/base/common/dataTransfer';
+import { FileUploadService } from '@theia/filesystem/lib/common/upload/file-upload';
 
 /**
  * @monaco-uplift The public API declares these functions as (languageId: string, service).
@@ -647,7 +646,9 @@ export class LanguagesMainImpl implements LanguagesMain, Disposable {
     protected async provideSignatureHelp(handle: number, model: monaco.editor.ITextModel,
         position: monaco.Position, token: monaco.CancellationToken,
         context: monaco.languages.SignatureHelpContext): Promise<monaco.languages.ProviderResult<monaco.languages.SignatureHelpResult>> {
-        const value = await this.proxy.$provideSignatureHelp(handle, model.uri, position, context, token);
+
+        // need to cast because of vscode issue https://github.com/microsoft/vscode/issues/190584
+        const value = await this.proxy.$provideSignatureHelp(handle, model.uri, position, context as SignatureHelpContext, token);
         if (!value) {
             return undefined;
         }
@@ -734,35 +735,24 @@ export class LanguagesMainImpl implements LanguagesMain, Disposable {
             handle,
             StandaloneServices
                 .get(ILanguageFeaturesService)
-                .documentOnDropEditProvider
+                .documentDropEditProvider
                 .register(selector, this.createDocumentDropEditProvider(handle, metadata))
         );
     }
 
-    createDocumentDropEditProvider(handle: number, _metadata?: DocumentDropEditProviderMetadata): DocumentOnDropEditProvider {
+    createDocumentDropEditProvider(handle: number, _metadata?: DocumentDropEditProviderMetadata): DocumentDropEditProvider {
         return {
             // @monaco-uplift id and dropMimeTypes should be supported by the monaco drop editor provider after 1.82.0
             // id?: string;
             // dropMimeTypes: metadata?.dropMimeTypes ?? ['*/*'],
-            provideDocumentOnDropEdits: async (model, position, dataTransfer, token) => this.provideDocumentDropEdits(handle, model, position, dataTransfer, token)
+            provideDocumentDropEdits: async (model, position, dataTransfer, token) => this.provideDocumentDropEdits(handle, model, position, dataTransfer, token)
         };
     }
 
     protected async provideDocumentDropEdits(handle: number, model: ITextModel, position: monaco.IPosition,
-        dataTransfer: VSDataTransfer, token: CancellationToken): Promise<DocumentOnDropEdit | undefined> {
+        dataTransfer: IReadonlyVSDataTransfer, token: CancellationToken): Promise<DocumentDropEditsSession | undefined> {
         await this.fileUploadService.upload(new URI(), { source: dataTransfer, leaveInTemp: true });
-        const edit = await this.proxy.$provideDocumentDropEdits(handle, model.uri, position, await DataTransfer.toDataTransferDTO(dataTransfer), token);
-        if (edit) {
-            return {
-                // @monaco-uplift label and yieldTo should be supported by monaco after 1.82.0. The implementation relies on a copy of the plugin data
-                // label: label: edit.label ?? localize('defaultDropLabel', "Drop using '{0}' extension", this._extension.displayName || this._extension.name),,
-                // yieldTo: edit.yieldTo?.map(yTo => {
-                //      return 'mimeType' in yTo ? yTo : { providerId: DocumentOnDropEditAdapter.toInternalProviderId(yTo.extensionId, yTo.providerId) };
-                // }),
-                insertText: edit.insertText instanceof SnippetString ? { snippet: edit.insertText.value } : edit.insertText,
-                additionalEdit: toMonacoWorkspaceEdit(edit?.additionalEdit)
-            };
-        }
+        return undefined;
     }
 
     $registerFoldingRangeProvider(handle: number, pluginInfo: PluginInfo, selector: SerializedDocumentFilter[], eventHandle: number | undefined): void {
@@ -888,7 +878,8 @@ export class LanguagesMainImpl implements LanguagesMain, Disposable {
                 };
             },
             resolveInlayHint: async (hint, token): Promise<monaco.languages.InlayHint | undefined> => {
-                const dto: InlayHintDto = hint;
+                // need to cast because of vscode issue https://github.com/microsoft/vscode/issues/190584
+                const dto: InlayHintDto = hint as InlayHintDto;
                 if (typeof dto.cacheId !== 'number') {
                     return hint;
                 }
@@ -949,7 +940,11 @@ export class LanguagesMainImpl implements LanguagesMain, Disposable {
             },
             resolveCodeAction: (codeAction, token) => this.resolveCodeAction(handle, codeAction, token)
         };
-        this.register(handle, (monaco.languages.registerCodeActionProvider as RegistrationFunction<monaco.languages.CodeActionProvider>)(languageSelector, quickFixProvider));
+        this.register(handle,
+            monaco.languages.registerCodeActionProvider(languageSelector, quickFixProvider, {
+                documentation: documentation,
+                providedCodeActionKinds
+            }));
     }
 
     protected async provideCodeActions(
@@ -959,14 +954,19 @@ export class LanguagesMainImpl implements LanguagesMain, Disposable {
         context: monaco.languages.CodeActionContext,
         token: monaco.CancellationToken
     ): Promise<monaco.languages.CodeActionList | undefined> {
-        const actions = await this.proxy.$provideCodeActions(handle, model.uri, rangeOrSelection, this.toModelCodeActionContext(context), token);
-        if (!actions) {
+        try {
+            const actions = await this.proxy.$provideCodeActions(handle, model.uri, rangeOrSelection, this.toModelCodeActionContext(context), token);
+            if (!actions) {
+                return undefined;
+            }
+            return {
+                actions: actions.map(a => toMonacoAction(a)),
+                dispose: () => this.proxy.$releaseCodeActions(handle, actions.map(a => a.cacheId))
+            };
+        } catch (e) {
+            console.error(e);
             return undefined;
         }
-        return {
-            actions: actions.map(a => toMonacoAction(a)),
-            dispose: () => this.proxy.$releaseCodeActions(handle, actions.map(a => a.cacheId))
-        };
     }
 
     protected toModelCodeActionContext(context: monaco.languages.CodeActionContext): CodeActionContext {
@@ -1430,7 +1430,6 @@ export function toMonacoWorkspaceEdit(data: WorkspaceEditDto | undefined): monac
                     metadata: fileEdit.metadata
                 };
             }
-            // TODO implement WorkspaceNotebookCellEditDto
         })
     };
 }

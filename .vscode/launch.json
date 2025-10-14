@@ -5,6 +5,17 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Playwright Tests",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/node_modules/@playwright/test/cli.js",
+      "cwd": "${workspaceFolder}/examples/playwright",
+      "args": [
+        "test",
+        "--config=./configs/playwright.config.ts"
+      ]
+    },
+    {
       "type": "node",
       "request": "attach",
       "name": "Attach by Process ID",
@@ -58,12 +69,13 @@
       "request": "launch",
       "name": "Launch Browser Backend",
       "program": "${workspaceFolder}/examples/browser/lib/backend/main.js",
+      "cwd": "${workspaceFolder}/examples/browser",
       "args": [
         "--hostname=0.0.0.0",
         "--port=3000",
         "--no-cluster",
         "--app-project-path=${workspaceFolder}/examples/browser",
-        "--plugins=local-dir:plugins",
+        "--plugins=local-dir:../../plugins",
         "--hosted-plugin-inspect=9339",
         "--ovsx-router-config=${workspaceFolder}/examples/ovsx-router-config.json"
       ],

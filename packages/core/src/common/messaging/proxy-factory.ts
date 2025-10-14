@@ -168,14 +168,7 @@ export class RpcProxyFactory<T extends object> implements ProxyHandler<T> {
                 throw new Error(`no target was set to handle ${method}`);
             }
         } catch (error) {
-            const e = this.serializeError(error);
-            if (e instanceof ResponseError) {
-                throw e;
-            }
-            const reason = e.message || '';
-            const stack = e.stack || '';
-            console.error(`Request ${method} failed with error: ${reason}`, stack);
-            throw e;
+            throw this.serializeError(error);
         }
     }
 
@@ -242,6 +235,10 @@ export class RpcProxyFactory<T extends object> implements ProxyHandler<T> {
         }
         if (p === 'then') {
             // Prevent inversify from identifying this proxy as a promise object.
+            return undefined;
+        }
+        if (p === 'toJSON') {
+            // Prevent packr from attempting to serialize proxies with `toJSON`.
             return undefined;
         }
         const isNotify = this.isNotification(p);
@@ -340,4 +337,3 @@ export class JsonRpcProxyFactory<T extends object> extends RpcProxyFactory<T> {
 decorate(injectable(), JsonRpcProxyFactory);
 // eslint-disable-next-line deprecation/deprecation
 decorate(unmanaged(), JsonRpcProxyFactory, 0);
-

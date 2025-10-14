@@ -16,7 +16,7 @@
 
 import * as theia from '@theia/plugin';
 import * as lstypes from '@theia/core/shared/vscode-languageserver-protocol';
-import { InlineValueEvaluatableExpression, InlineValueText, InlineValueVariableLookup, QuickPickItemKind, URI } from './types-impl';
+import { InlineValueEvaluatableExpression, InlineValueText, InlineValueVariableLookup, QuickPickItemKind, ThemeIcon, URI } from './types-impl';
 import * as rpc from '../common/plugin-api-rpc';
 import {
     DecorationOptions, EditorPosition, Plugin, Position, WorkspaceTextEditDto, WorkspaceFileEditDto, Selection, TaskDto, WorkspaceEditDto
@@ -34,7 +34,8 @@ import { BinaryBuffer } from '@theia/core/lib/common/buffer';
 import { CellRange, isTextStreamMime } from '@theia/notebook/lib/common';
 import { MarkdownString as MarkdownStringDTO } from '@theia/core/lib/common/markdown-rendering';
 
-import { TestItemDTO, TestMessageDTO } from '../common/test-types';
+import { TestItemDTO, TestMessageDTO, TestMessageStackFrameDTO } from '../common/test-types';
+import { PluginIconPath } from './plugin-icon-path';
 
 const SIDE_GROUP = -2;
 const ACTIVE_GROUP = -1;
@@ -133,12 +134,21 @@ export function fromRange(range: theia.Range | undefined): model.Range | undefin
         endColumn: end.character + 1
     };
 }
-
-export function fromPosition(position: types.Position | theia.Position): Position {
+export function fromPosition(position: types.Position | theia.Position): Position;
+export function fromPosition(position: types.Position | theia.Position | undefined): Position | undefined;
+export function fromPosition(position: types.Position | theia.Position | undefined): Position | undefined {
+    if (!position) {
+        return undefined;
+    }
     return { lineNumber: position.line + 1, column: position.character + 1 };
 }
 
-export function toPosition(position: Position): types.Position {
+export function toPosition(position: Position): types.Position;
+export function toPosition(position: Position | undefined): types.Position | undefined;
+export function toPosition(position: Position | undefined): types.Position | undefined {
+    if (!position) {
+        return undefined;
+    }
     return new types.Position(position.lineNumber - 1, position.column - 1);
 }
 
@@ -332,11 +342,12 @@ export function fromTextEdit(edit: theia.TextEdit): model.TextEdit {
     };
 }
 
-function fromSnippetTextEdit(edit: theia.SnippetTextEdit): model.TextEdit & { insertAsSnippet?: boolean } {
+function fromSnippetTextEdit(edit: theia.SnippetTextEdit): model.TextEdit & { insertAsSnippet?: boolean, keepWhitespace?: boolean } {
     return {
         text: edit.snippet.value,
         range: fromRange(edit.range),
-        insertAsSnippet: true
+        insertAsSnippet: true,
+        keepWhitespace: edit.keepWhitespace
     };
 }
 
@@ -473,6 +484,18 @@ export function fromLocation(location: theia.Location | undefined): model.Locati
     };
 }
 
+export function fromLocationToLanguageServerLocation(location: theia.Location): lstypes.Location;
+export function fromLocationToLanguageServerLocation(location: theia.Location | undefined): lstypes.Location | undefined;
+export function fromLocationToLanguageServerLocation(location: theia.Location | undefined): lstypes.Location | undefined {
+    if (!location) {
+        return undefined;
+    }
+    return <lstypes.Location>{
+        uri: location.uri.toString(),
+        range: location.range
+    };
+}
+
 export function fromTextDocumentShowOptions(options: theia.TextDocumentShowOptions): model.TextDocumentShowOptions {
     if (options.selection) {
         return {
@@ -594,17 +617,24 @@ export function fromWorkspaceEdit(value: theia.WorkspaceEdit, documents?: any): 
     };
     for (const entry of (value as types.WorkspaceEdit)._allEntries()) {
         if (entry?._type === types.FileEditType.Text) {
-            // text edits
             const doc = documents ? documents.getDocument(entry.uri.toString()) : undefined;
             const workspaceTextEditDto: WorkspaceTextEditDto = {
                 resource: entry.uri,
                 modelVersionId: doc?.version,
-                textEdit: (entry.edit instanceof types.TextEdit) ? fromTextEdit(entry.edit) : fromSnippetTextEdit(entry.edit),
+                textEdit: fromTextEdit(entry.edit),
+                metadata: entry.metadata
+            };
+            result.edits.push(workspaceTextEditDto);
+        } else if (entry?._type === types.FileEditType.Snippet) {
+            const doc = documents ? documents.getDocument(entry.uri.toString()) : undefined;
+            const workspaceTextEditDto: WorkspaceTextEditDto = {
+                resource: entry.uri,
+                modelVersionId: doc?.version,
+                textEdit: fromSnippetTextEdit(entry.edit),
                 metadata: entry.metadata
             };
             result.edits.push(workspaceTextEditDto);
         } else if (entry?._type === types.FileEditType.File) {
-            // resource edits
             const workspaceFileEditDto: WorkspaceFileEditDto = {
                 oldResource: entry.from,
                 newResource: entry.to,
@@ -613,7 +643,6 @@ export function fromWorkspaceEdit(value: theia.WorkspaceEdit, documents?: any): 
             };
             result.edits.push(workspaceFileEditDto);
         } else if (entry?._type === types.FileEditType.Cell) {
-            // cell edit
             if (entry.edit) {
                 result.edits.push({
                     metadata: entry.metadata,
@@ -622,7 +651,6 @@ export function fromWorkspaceEdit(value: theia.WorkspaceEdit, documents?: any): 
                 });
             }
         } else if (entry?._type === types.FileEditType.CellReplace) {
-            // cell replace
             result.edits.push({
                 metadata: entry.metadata,
                 resource: entry.uri,
@@ -730,6 +758,26 @@ export function toSymbolTag(kind: model.SymbolTag): types.SymbolTag {
     }
 }
 
+/**
+ * Creates a merged symbol of type theia.SymbolInformation & theia.DocumentSymbol.
+ * Is only used as the result type of the `vscode.executeDocumentSymbolProvider` command.
+ */
+export function toMergedSymbol(uri: UriComponents, symbol: model.DocumentSymbol): theia.SymbolInformation & theia.DocumentSymbol {
+    const uriValue = URI.revive(uri);
+    const location = new types.Location(uriValue, toRange(symbol.range));
+    return {
+        name: symbol.name,
+        containerName: symbol.containerName ?? '',
+        kind: SymbolKind.toSymbolKind(symbol.kind),
+        tags: [],
+        location,
+        detail: symbol.detail,
+        range: location.range,
+        selectionRange: toRange(symbol.selectionRange),
+        children: symbol.children?.map(child => toMergedSymbol(uri, child)) ?? []
+    };
+}
+
 export function isModelLocation(arg: unknown): arg is model.Location {
     return isObject<model.Location>(arg) &&
         isModelRange(arg.range) &&
@@ -747,9 +795,10 @@ export function isModelRange(arg: unknown): arg is model.Range {
 export function isUriComponents(arg: unknown): arg is UriComponents {
     return isObject<UriComponents>(arg) &&
         typeof arg.scheme === 'string' &&
-        typeof arg.path === 'string' &&
-        typeof arg.query === 'string' &&
-        typeof arg.fragment === 'string';
+        (arg['$mid'] === 1 || (
+            typeof arg.path === 'string' &&
+            typeof arg.query === 'string' &&
+            typeof arg.fragment === 'string'));
 }
 
 export function isModelCallHierarchyItem(arg: unknown): arg is model.CallHierarchyItem {
@@ -934,7 +983,7 @@ export function toTask(taskDto: TaskDto): theia.Task {
         throw new Error('Task should be provided for converting');
     }
 
-    const { type, taskType, label, source, scope, problemMatcher, detail, command, args, options, group, presentation, runOptions, ...properties } = taskDto;
+    const { type, executionType, label, source, scope, problemMatcher, detail, command, args, options, group, presentation, runOptions, ...properties } = taskDto;
     const result = {} as theia.Task;
     result.name = label;
     result.source = source;
@@ -959,16 +1008,16 @@ export function toTask(taskDto: TaskDto): theia.Task {
 
     result.definition = taskDefinition;
 
-    if (taskType === 'process') {
+    if (executionType === 'process') {
         result.execution = getProcessExecution(taskDto);
     }
 
     const execution = { command, args, options };
-    if (taskType === 'shell' || types.ShellExecution.is(execution)) {
+    if (executionType === 'shell' || types.ShellExecution.is(execution)) {
         result.execution = getShellExecution(taskDto);
     }
 
-    if (taskType === 'customExecution' || types.CustomExecution.is(execution)) {
+    if (executionType === 'customExecution' || types.CustomExecution.is(execution)) {
         result.execution = getCustomExecution(taskDto);
         // if taskType is customExecution, we need to put all the information into taskDefinition,
         // because some parameters may be in taskDefinition.
@@ -1004,7 +1053,7 @@ export function toTask(taskDto: TaskDto): theia.Task {
 }
 
 export function fromProcessExecution(execution: theia.ProcessExecution, taskDto: TaskDto): TaskDto {
-    taskDto.taskType = 'process';
+    taskDto.executionType = 'process';
     taskDto.command = execution.process;
     taskDto.args = execution.args;
 
@@ -1016,7 +1065,7 @@ export function fromProcessExecution(execution: theia.ProcessExecution, taskDto:
 }
 
 export function fromShellExecution(execution: theia.ShellExecution, taskDto: TaskDto): TaskDto {
-    taskDto.taskType = 'shell';
+    taskDto.executionType = 'shell';
     const options = execution.options;
     if (options) {
         taskDto.options = getShellExecutionOptions(options);
@@ -1038,7 +1087,7 @@ export function fromShellExecution(execution: theia.ShellExecution, taskDto: Tas
 }
 
 export function fromCustomExecution(execution: types.CustomExecution, taskDto: TaskDto): TaskDto {
-    taskDto.taskType = 'customExecution';
+    taskDto.executionType = 'customExecution';
     const callback = execution.callback;
     if (callback) {
         taskDto.callback = callback;
@@ -1212,23 +1261,57 @@ export function fromColorPresentation(colorPresentation: theia.ColorPresentation
     };
 }
 
-export function convertToTransferQuickPickItems(items: rpc.Item[]): rpc.TransferQuickPickItems[] {
-    return items.map<rpc.TransferQuickPickItems>((item, index) => {
+export function convertIconPath(iconPath: types.URI | { light: types.URI; dark: types.URI } | theia.ThemeIcon | undefined):
+    UriComponents | { light: UriComponents; dark: UriComponents } | ThemeIcon | undefined {
+    if (!iconPath) {
+        return undefined;
+    }
+    if (iconPath instanceof types.URI) {
+        return iconPath.toJSON();
+    } else if ('dark' in iconPath) {
+        return {
+            dark: iconPath.dark.toJSON(),
+            light: iconPath.light?.toJSON()
+        };
+    } else if (ThemeIcon.is(iconPath)) {
+        return {
+            id: iconPath.id,
+            color: iconPath.color ? { id: iconPath.color.id } : undefined
+        };
+    } else {
+        return undefined;
+    }
+}
+
+export function convertQuickInputButton(plugin: Plugin, button: theia.QuickInputButton, index: number): rpc.TransferQuickInputButton {
+    const iconPath = convertIconPath(button.iconPath);
+    if (!iconPath) {
+        throw new Error(`Could not convert icon path: '${button.iconPath}'`);
+    }
+    return {
+        handle: index,
+        iconUrl: PluginIconPath.toUrl(iconPath, plugin) ?? ThemeIcon.get(iconPath),
+        tooltip: button.tooltip
+    };
+}
+
+export function convertToTransferQuickPickItems(plugin: Plugin, items: (theia.QuickPickItem | string)[]): rpc.TransferQuickPickItem[] {
+    return items.map((item, index) => {
         if (typeof item === 'string') {
-            return { type: 'item', label: item, handle: index };
+            return { kind: 'item', label: item, handle: index };
         } else if (item.kind === QuickPickItemKind.Separator) {
-            return { type: 'separator', label: item.label, handle: index };
+            return { kind: 'separator', label: item.label, handle: index };
         } else {
             const { label, description, iconPath, detail, picked, alwaysShow, buttons } = item;
             return {
-                type: 'item',
+                kind: 'item',
                 label,
                 description,
-                iconPath,
+                iconUrl: PluginIconPath.toUrl(iconPath, plugin) ?? ThemeIcon.get(iconPath),
                 detail,
                 picked,
                 alwaysShow,
-                buttons,
+                buttons: buttons ? buttons.map((button, i) => convertQuickInputButton(plugin, button, i)) : undefined,
                 handle: index,
             };
         }
@@ -1403,7 +1486,7 @@ export namespace DataTransferItem {
                     return {
                         name: file.name,
                         uri: URI.revive(file.uri),
-                        data: () => resolveFileData(item.id),
+                        data: () => resolveFileData(file.id),
                     };
                 }
             }('');
@@ -1486,8 +1569,8 @@ export namespace NotebookCellData {
             cellKind: NotebookCellKind.from(data.kind),
             language: data.languageId,
             source: data.value,
-            // metadata: data.metadata,
-            // internalMetadata: NotebookCellExecutionSummary.from(data.executionSummary ?? {}),
+            metadata: data.metadata,
+            internalMetadata: NotebookCellExecutionSummary.from(data.executionSummary ?? {}),
             outputs: data.outputs ? data.outputs.map(NotebookCellOutputConverter.from) : []
         };
     }
@@ -1641,12 +1724,23 @@ export namespace TestMessage {
             return message.map(msg => TestMessage.from(msg)[0]);
         }
         return [{
-            location: fromLocation(message.location),
+            location: fromLocationToLanguageServerLocation(message.location),
             message: fromMarkdown(message.message)!,
             expected: message.expectedOutput,
             actual: message.actualOutput,
-            contextValue: message.contextValue
+            contextValue: message.contextValue,
+            stackTrace: message.stackTrace && message.stackTrace.map(frame => TestMessageStackFrame.from(frame))
         }];
+    }
+}
+
+export namespace TestMessageStackFrame {
+    export function from(stackTrace: theia.TestMessageStackFrame): TestMessageStackFrameDTO {
+        return {
+            label: stackTrace.label,
+            position: stackTrace.position,
+            uri: stackTrace?.uri?.toString()
+        };
     }
 }
 

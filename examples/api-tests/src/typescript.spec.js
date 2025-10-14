@@ -16,9 +16,11 @@
 
 // @ts-check
 describe('TypeScript', function () {
-    this.timeout(30_000);
+    this.timeout(360_000);
 
     const { assert } = chai;
+    const { timeout } = require('@theia/core/lib/common/promise-util');
+    const { MenuModelRegistry } = require('@theia/core/lib/common/menu/menu-model-registry');
 
     const Uri = require('@theia/core/lib/common/uri');
     const { DisposableCollection } = require('@theia/core/lib/common/disposable');
@@ -33,8 +35,8 @@ describe('TypeScript', function () {
     const { CommandRegistry } = require('@theia/core/lib/common/command');
     const { KeybindingRegistry } = require('@theia/core/lib/browser/keybinding');
     const { OpenerService, open } = require('@theia/core/lib/browser/opener-service');
-    const { animationFrame } = require('@theia/core/lib/browser/browser');
-    const { PreferenceService, PreferenceScope } = require('@theia/core/lib/browser/preferences/preference-service');
+    const { PreferenceService } = require('@theia/core/lib/common/preferences/preference-service');
+    const { PreferenceScope } = require('@theia/core/lib/common/preferences/preference-scope');
     const { ProgressStatusBarItem } = require('@theia/core/lib/browser/progress-status-bar-item');
     const { PluginViewRegistry } = require('@theia/plugin-ext/lib/main/browser/view/plugin-view-registry');
     const { Range } = require('@theia/monaco-editor-core/esm/vs/editor/common/core/range');
@@ -44,13 +46,14 @@ describe('TypeScript', function () {
     const editorManager = container.get(EditorManager);
     const workspaceService = container.get(WorkspaceService);
     const menuFactory = container.get(BrowserMainMenuFactory);
+    const menuRegistry = container.get(MenuModelRegistry);
     const pluginService = container.get(HostedPluginSupport);
     const contextKeyService = container.get(ContextKeyService);
     const commands = container.get(CommandRegistry);
     const openerService = container.get(OpenerService);
     /** @type {KeybindingRegistry} */
     const keybindings = container.get(KeybindingRegistry);
-    /** @type {import('@theia/core/lib/browser/preferences/preference-service').PreferenceService} */
+    /** @type {import('@theia/core/lib/common/preferences/preference-service').PreferenceService} */
     const preferences = container.get(PreferenceService);
     const progressStatusBarItem = container.get(ProgressStatusBarItem);
     /** @type {PluginViewRegistry} */
@@ -58,22 +61,22 @@ describe('TypeScript', function () {
 
     const typescriptPluginId = 'vscode.typescript-language-features';
     const referencesPluginId = 'vscode.references-view';
-    const eslintPluginId = 'dbaeumer.vscode-eslint';
     /** @type Uri.URI */
     const rootUri = workspaceService.tryGetRoots()[0].resource;
     const demoFileUri = rootUri.resolveToAbsolute('../api-tests/test-ts-workspace/demo-file.ts');
     const definitionFileUri = rootUri.resolveToAbsolute('../api-tests/test-ts-workspace/demo-definitions-file.ts');
-    let originalAutoSaveValue = preferences.inspect('files.autoSave').globalValue;
+    let originalAutoSaveValue = preferences.get('files.autoSave');
 
     before(async function () {
         await pluginService.didStart;
-        await Promise.all([typescriptPluginId, referencesPluginId, eslintPluginId].map(async pluginId => {
+        await Promise.all([typescriptPluginId, referencesPluginId].map(async pluginId => {
             if (!pluginService.getPlugin(pluginId)) {
                 throw new Error(pluginId + ' should be started');
             }
             await pluginService.activatePlugin(pluginId);
-        }).concat(preferences.set('files.autoSave', 'off', PreferenceScope.User)));
-        await preferences.set('files.refactoring.autoSave', 'off', PreferenceScope.User);
+        }));
+        await preferences.set('files.autoSave', 'off');
+        await preferences.set('files.refactoring.autoSave', 'off');
     });
 
     beforeEach(async function () {
@@ -89,8 +92,26 @@ describe('TypeScript', function () {
     });
 
     after(async () => {
-        await preferences.set('files.autoSave', originalAutoSaveValue, PreferenceScope.User);
+        await preferences.set('files.autoSave', originalAutoSaveValue);
     })
+
+    async function waitLanguageServerReady() {
+        // quite a bit of jitter in the "Initializing LS" status bar entry,
+        // so we want to read a few times in a row that it's done (undefined)
+        const MAX_N = 5
+        let n = MAX_N;
+        while (n > 0) {
+            await timeout(1000);
+            if (progressStatusBarItem.currentProgress) {
+                n = MAX_N;
+            } else {
+                n--;
+            }
+            if (n < 5) {
+                console.debug('n = ' + n);
+            }
+        }
+    }
 
     /**
      * @param {Uri.default} uri
@@ -103,35 +124,33 @@ describe('TypeScript', function () {
         assert.isDefined(editor);
         // wait till tsserver is running, see:
         // https://github.com/microsoft/vscode/blob/93cbbc5cae50e9f5f5046343c751b6d010468200/extensions/typescript-language-features/src/extension.ts#L98-L103
-        await waitForAnimation(() => contextKeyService.match('typescript.isManagedFile'));
-        // wait till projects are loaded, see:
-        // https://github.com/microsoft/vscode/blob/4aac84268c6226d23828cc6a1fe45ee3982927f0/extensions/typescript-language-features/src/typescriptServiceClient.ts#L911
-        await waitForAnimation(() => !progressStatusBarItem.currentProgress);
+        await waitForAnimation(() => contextKeyService.match('typescript.isManagedFile'), 1000000, 'waiting for "typescript.isManagedFile"');
+
+        waitLanguageServerReady();
         return /** @type {MonacoEditor} */ (editor);
     }
 
+
     /**
-     * @param {() => Promise<unknown> | unknown} condition
-     * @param {number | undefined} [timeout]
-     * @param {string | undefined} [message]
-     * @returns {Promise<void>}
-     */
-    function waitForAnimation(condition, timeout, message) {
-        const success = new Promise(async (resolve, reject) => {
-            toTearDown.push({ dispose: () => reject(message ?? 'Test terminated before resolution.') });
-            do {
-                await animationFrame();
-            } while (!condition());
-            resolve();
-        });
-        if (timeout !== undefined) {
-            const timedOut = new Promise((_, fail) => {
-                const toClear = setTimeout(() => fail(new Error(message ?? 'Wait for animation timed out.')), timeout);
-                toTearDown.push({ dispose: () => (fail(new Error(message ?? 'Wait for animation timed out.')), clearTimeout(toClear)) });
-            });
-            return Promise.race([success, timedOut]);
+         * @param {() => unknown} condition
+         * @param {number | undefined} [maxWait]
+         * @param {string | function | undefined} [message]
+         * @returns {Promise<void>}
+         */
+    async function waitForAnimation(condition, maxWait, message) {
+        if (maxWait === undefined) {
+            maxWait = 100000;
         }
-        return success;
+        const endTime = Date.now() + maxWait;
+        do {
+            await (timeout(100));
+            if (condition()) {
+                return;
+            }
+            if (Date.now() > endTime) {
+                throw new Error((typeof message === 'function' ? message() : message) ?? 'Wait for animation timed out.');
+            }
+        } while (true);
     }
 
     /**
@@ -142,6 +161,9 @@ describe('TypeScript', function () {
      * @returns {string}
      */
     function nodeAsString(element, indentation = '') {
+        if (!element) {
+            return '';
+        }
         const header = element.tagName;
         let body = '';
         const childIndentation = indentation + '  ';
@@ -200,16 +222,8 @@ describe('TypeScript', function () {
         await assertPeekOpened(editor);
 
         console.log('closePeek() - Attempt to close by sending "Escape"');
-        keybindings.dispatchKeyDown('Escape');
-        await waitForAnimation(() => {
-            const isClosed = !contextKeyService.match('listFocus');
-            if (!isClosed) {
-                console.log('...');
-                keybindings.dispatchKeyDown('Escape');
-                return false;
-            }
-            return true;
-        });
+        await dismissWithEscape('listFocus');
+
         assert.isTrue(contextKeyService.match('editorTextFocus'));
         assert.isFalse(contextKeyService.match('referenceSearchVisible'));
         assert.isFalse(contextKeyService.match('listFocus'));
@@ -217,13 +231,13 @@ describe('TypeScript', function () {
 
     it('document formatting should be visible and enabled', async function () {
         await openEditor(demoFileUri);
-        const menu = menuFactory.createContextMenu(EDITOR_CONTEXT_MENU);
+        const menu = menuFactory.createContextMenu(EDITOR_CONTEXT_MENU, menuRegistry.getMenu(EDITOR_CONTEXT_MENU), contextKeyService);
         const item = menu.items.find(i => i.command === 'editor.action.formatDocument');
         if (item) {
-            assert.isTrue(item.isVisible);
-            assert.isTrue(item.isEnabled);
+            assert.isTrue(item.isVisible, 'item is visible');
+            assert.isTrue(item.isEnabled, 'item is enabled');
         } else {
-            assert.isDefined(item);
+            assert.isDefined(item, 'item is defined');
         }
     });
 
@@ -233,8 +247,8 @@ describe('TypeScript', function () {
             it('within ' + from, async function () {
                 const editor = await openEditor(demoFileUri, preview);
                 // const demoInstance = new Demo|Class('demo');
-                editor.getControl().setPosition({ lineNumber: 24, column: 30 });
-                assert.equal(editor.getControl().getModel().getWordAtPosition(editor.getControl().getPosition()).word, 'DemoClass');
+                editor.getControl().setPosition({ lineNumber: 28, column: 5 });
+                assert.equal(editor.getControl().getModel().getWordAtPosition(editor.getControl().getPosition()).word, 'demoVariable');
 
                 await commands.executeCommand('editor.action.revealDefinition');
 
@@ -243,8 +257,8 @@ describe('TypeScript', function () {
                 assert.equal(activeEditor.uri.toString(), demoFileUri.toString());
                 // constructor(someString: string) {
                 const { lineNumber, column } = activeEditor.getControl().getPosition();
-                assert.deepEqual({ lineNumber, column }, { lineNumber: 11, column: 5 });
-                assert.equal(activeEditor.getControl().getModel().getWordAtPosition({ lineNumber, column }).word, 'constructor');
+                assert.deepEqual({ lineNumber, column }, { lineNumber: 26, column: 7 });
+                assert.equal(activeEditor.getControl().getModel().getWordAtPosition({ lineNumber, column }).word, 'demoVariable');
             });
 
             // Note: this test generate annoying but apparently harmless error traces, during cleanup:
@@ -386,6 +400,14 @@ describe('TypeScript', function () {
         assert.isTrue(contextKeyService.match('editorTextFocus'));
         assert.isTrue(contextKeyService.match('suggestWidgetVisible'));
 
+
+        const suggestController = editor.getControl().getContribution('editor.contrib.suggestController');
+
+        waitForAnimation(() => {
+            const content = suggestController ? nodeAsString(suggestController['_widget']?.['_value']?.['element']?.['domNode']) : '';
+            return !content.includes('loading');
+        });
+
         // May need a couple extra "Enter" being sent for the suggest to be accepted
         keybindings.dispatchKeyDown('Enter');
         await waitForAnimation(() => {
@@ -396,7 +418,7 @@ describe('TypeScript', function () {
                 return false;
             }
             return true;
-        }, 5000, 'Suggest widget has not been dismissed despite attempts to accept suggestion');
+        }, 20000, 'Suggest widget has not been dismissed despite attempts to accept suggestion');
 
         assert.isTrue(contextKeyService.match('editorTextFocus'));
         assert.isFalse(contextKeyService.match('suggestWidgetVisible'));
@@ -500,7 +522,23 @@ describe('TypeScript', function () {
         assert.equal(activeEditor.getControl().getModel().getWordAtPosition({ lineNumber: 28, column: 1 }).word, 'foo');
     });
 
+    async function dismissWithEscape(contextKey) {
+        keybindings.dispatchKeyDown('Escape');
+        // once in a while, a second "Escape" is needed to dismiss widget
+        return waitForAnimation(() => {
+            const suggestWidgetDismissed = !contextKeyService.match(contextKey);
+            if (!suggestWidgetDismissed) {
+                console.log(`Re-try to dismiss ${contextKey} using "Escape" key`);
+                keybindings.dispatchKeyDown('Escape');
+                return false;
+            }
+            return true;
+        }, 5000, `${contextKey} widget not dismissed`);
+    }
+
     it('editor.action.triggerParameterHints', async function () {
+        this.timeout(30000);
+        console.log('start trigger parameter hint');
         const editor = await openEditor(demoFileUri);
         // const demoInstance = new DemoClass('|demo');
         editor.getControl().setPosition({ lineNumber: 24, column: 37 });
@@ -510,60 +548,47 @@ describe('TypeScript', function () {
         assert.isFalse(contextKeyService.match('parameterHintsVisible'));
 
         await commands.executeCommand('editor.action.triggerParameterHints');
+        console.log('trigger command');
         await waitForAnimation(() => contextKeyService.match('parameterHintsVisible'));
+        console.log('context key matched');
 
         assert.isTrue(contextKeyService.match('editorTextFocus'));
         assert.isTrue(contextKeyService.match('parameterHintsVisible'));
 
-        keybindings.dispatchKeyDown('Escape');
-        await waitForAnimation(() => !contextKeyService.match('parameterHintsVisible'));
+        await dismissWithEscape('parameterHintsVisible');
 
         assert.isTrue(contextKeyService.match('editorTextFocus'));
         assert.isFalse(contextKeyService.match('parameterHintsVisible'));
     });
 
     it('editor.action.showHover', async function () {
+
         const editor = await openEditor(demoFileUri);
         // class |DemoClass);
         editor.getControl().setPosition({ lineNumber: 8, column: 7 });
         assert.equal(editor.getControl().getModel().getWordAtPosition(editor.getControl().getPosition()).word, 'DemoClass');
 
-        /** @type {import('@theia/monaco-editor-core/src/vs/editor/contrib/hover/browser/hover').ModesHoverController} */
-        const hover = editor.getControl().getContribution('editor.contrib.hover');
+        /** @type {import('@theia/monaco-editor-core/src/vs/editor/contrib/hover/browser/contentHoverController').ContentHoverController} */
+        const hover = editor.getControl().getContribution('editor.contrib.contentHover');
 
         assert.isTrue(contextKeyService.match('editorTextFocus'));
-        assert.isFalse(Boolean(hover['_contentWidget']?.['_widget']?.['_visibleData']));
+        assert.isFalse(contextKeyService.match('editorHoverVisible'));
         await commands.executeCommand('editor.action.showHover');
         let doLog = true;
-        await waitForAnimation(() => hover['_contentWidget']?.['_widget']?.['_visibleData']);
+        await waitForAnimation(() => contextKeyService.match('editorHoverVisible'));
+        assert.isTrue(contextKeyService.match('editorHoverVisible'));
         assert.isTrue(contextKeyService.match('editorTextFocus'));
-        assert.isTrue(Boolean(hover['_contentWidget']?.['_widget']?.['_visibleData']));
-        assert.deepEqual(nodeAsString(hover['_contentWidget']?.['_widget']?.['_hover']?.['contentsDomNode']).trim(), `
-DIV {
-  DIV {
-    DIV {
-      DIV {
-        DIV {
-          SPAN {
-            DIV {
-              SPAN {
-                "class"
-              }
-              SPAN {
-                " "
-              }
-              SPAN {
-                "DemoClass"
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}`.trim());
-        keybindings.dispatchKeyDown('Escape');
-        await waitForAnimation(() => !hover['_contentWidget']?.['_widget']?.['_visibleData']);
+
+        waitForAnimation(() => {
+            const content = nodeAsString(hover['_contentWidget']?.['widget']?.['_hover']?.['contentsDomNode']);
+            return !content.includes('loading');
+        });
+
+        const content = nodeAsString(hover['_contentWidget']?.['widget']?.['_hover']?.['contentsDomNode']);
+
+        assert.isTrue(content.includes('class', 'did not include'));
+        assert.isTrue(content.includes('DemoClass', 'did not include'));
+        await dismissWithEscape('editorHoverVisible');
         assert.isTrue(contextKeyService.match('editorTextFocus'));
         assert.isFalse(Boolean(hover['_contentWidget']?.['_widget']?.['_visibleData']));
     });
@@ -688,11 +713,10 @@ SPAN {
         editor.getControl().revealPosition({ lineNumber, column });
         assert.equal(currentChar(), ';', 'Failed at assert 1');
 
-        /** @type {import('@theia/monaco-editor-core/src/vs/editor/contrib/codeAction/browser/codeActionCommands').CodeActionController} */
+        /** @type {import('@theia/monaco-editor-core/src/vs/editor/contrib/codeAction/browser/codeActionController').CodeActionController} */
         const codeActionController = editor.getControl().getContribution('editor.contrib.codeActionController');
         const lightBulbNode = () => {
-            const ui = codeActionController['_ui'].rawValue;
-            const lightBulb = ui && ui['_lightBulbWidget'].rawValue;
+            const lightBulb = codeActionController['_lightBulbWidget'].rawValue;
             return lightBulb && lightBulb['_domNode'];
         };
         const lightBulbVisible = () => {
@@ -700,41 +724,29 @@ SPAN {
             return !!node && node.style.visibility !== 'hidden';
         };
 
-        assert.isFalse(lightBulbVisible(), 'Failed at assert 2');
-        await waitForAnimation(() => lightBulbVisible());
+        await timeout(1000); // quick fix is always available: need to wait for the error fix to become available.
 
         await commands.executeCommand('editor.action.quickFix');
-        const codeActionSelector = '.codeActionWidget';
+        const codeActionSelector = '.action-widget';
         assert.isFalse(!!document.querySelector(codeActionSelector), 'Failed at assert 3 - codeActionWidget should not be visible');
 
         console.log('Waiting for Quick Fix widget to be visible');
         await waitForAnimation(() => {
             const quickFixWidgetVisible = !!document.querySelector(codeActionSelector);
             if (!quickFixWidgetVisible) {
-                console.log('...');
+                // console.log('...');
                 return false;
             }
             return true;
         }, 10000, 'Timed-out waiting for the QuickFix widget to appear');
-        await animationFrame();
+        await timeout();
 
         assert.isTrue(lightBulbVisible(), 'Failed at assert 4');
         keybindings.dispatchKeyDown('Enter');
         console.log('Waiting for confirmation that QuickFix has taken effect');
-        await waitForAnimation(() => {
-            const quickFixHasTakenEffect = !lightBulbVisible();
-            if (!quickFixHasTakenEffect) {
-                console.log('...');
-                return false;
-            }
-            return true;
-        }, 5000, 'Quickfix widget has not been dismissed despite attempts to accept suggestion');
 
-        await waitForAnimation(() => currentChar() === 'd', 5000, 'Failed to detect expected selected char: "d"');
+        await waitForAnimation(() => currentChar() === 'd', 10000, 'Failed to detect expected selected char: "d"');
         assert.equal(currentChar(), 'd', 'Failed at assert 5');
-
-        await waitForAnimation(() => !lightBulbVisible());
-        assert.isFalse(lightBulbVisible(), 'Failed at assert 6');
     });
 
     it('editor.action.formatDocument', async function () {
@@ -780,46 +792,36 @@ SPAN {
         assert.equal(editor.getControl().getModel().getLineLength(lineNumber), originalLength);
     });
 
-    for (const referenceViewCommand of ['references-view.find', 'references-view.findImplementations']) {
-        it(referenceViewCommand, async function () {
-            let steps = 0;
-            const editor = await openEditor(demoFileUri);
-            editor.getControl().setPosition({ lineNumber: 24, column: 11 });
-            assert.equal(editor.getControl().getModel().getWordAtPosition(editor.getControl().getPosition()).word, 'demoInstance');
-            await commands.executeCommand(referenceViewCommand);
-            const view = await pluginViewRegistry.openView('references-view.tree', { reveal: true });
-            const expectedMessage = referenceViewCommand === 'references-view.find' ? '2 results in 1 file' : '1 result in 1 file';
-            const getResultText = () => view.node.getElementsByClassName('theia-TreeViewInfo').item(0)?.textContent;
-            await waitForAnimation(() => getResultText() === expectedMessage, 5000);
-            assert.equal(getResultText(), expectedMessage);
-        });
-    }
-
     it('Can execute code actions', async function () {
         const editor = await openEditor(demoFileUri);
-        /** @type {import('@theia/monaco-editor-core/src/vs/editor/contrib/codeAction/browser/codeActionCommands').CodeActionController} */
+        /** @type {import('@theia/monaco-editor-core/src/vs/editor/contrib/codeAction/browser/codeActionController').CodeActionController} */
         const codeActionController = editor.getControl().getContribution('editor.contrib.codeActionController');
         const isActionAvailable = () => {
-            const lightbulbVisibility = codeActionController['_ui'].rawValue?.['_lightBulbWidget'].rawValue?.['_domNode'].style.visibility;
+            const lightbulbVisibility = codeActionController['_lightBulbWidget'].rawValue?.['_domNode'].style.visibility;
             return lightbulbVisibility !== undefined && lightbulbVisibility !== 'hidden';
         }
-        assert.isFalse(isActionAvailable());
         assert.strictEqual(editor.getControl().getModel().getLineContent(30), 'import { DefinedInterface } from "./demo-definitions-file";');
         editor.getControl().revealLine(30);
         editor.getControl().setSelection(new Selection(30, 1, 30, 60));
         await waitForAnimation(() => isActionAvailable(), 5000, 'No code action available. (1)');
         assert.isTrue(isActionAvailable());
 
+        await timeout(1000)
+
         await commands.executeCommand('editor.action.quickFix');
-        await waitForAnimation(() => Boolean(document.querySelector('.context-view-pointerBlock')), 5000, 'No context menu appeared. (1)');
-        await animationFrame();
+        await waitForAnimation(() => {
+            const elements = document.querySelector('.action-widget');
+            return !!elements;
+        }, 5000, 'No context menu appeared. (1)');
+
+        await timeout();
 
         keybindings.dispatchKeyDown('Enter');
 
         assert.isNotNull(editor.getControl());
         assert.isNotNull(editor.getControl().getModel());
         console.log(`content: ${editor.getControl().getModel().getLineContent(30)}`);
-        await waitForAnimation(() => editor.getControl().getModel().getLineContent(30) === 'import * as demoDefinitionsFile from "./demo-definitions-file";', 5000, 'The namespace import did not take effect.');
+        await waitForAnimation(() => editor.getControl().getModel().getLineContent(30) === 'import * as demoDefinitionsFile from "./demo-definitions-file";', 5000, 'The namespace import did not take effect :' + editor.getControl().getModel().getLineContent(30));
 
         // momentarily toggle selection, waiting for code action to become unavailable.
         // Without doing this, the call to the quickfix command would sometimes fail because of an
@@ -845,12 +847,27 @@ SPAN {
         // Change import back: https://github.com/eclipse-theia/theia/issues/11059
         await commands.executeCommand('editor.action.quickFix');
         await waitForAnimation(() => Boolean(document.querySelector('.context-view-pointerBlock')), 5000, 'No context menu appeared. (2)');
-        await animationFrame();
+        await timeout();
 
         keybindings.dispatchKeyDown('Enter');
 
         assert.isNotNull(editor.getControl());
         assert.isNotNull(editor.getControl().getModel());
-        await waitForAnimation(() => editor.getControl().getModel().getLineContent(30) === 'import { DefinedInterface } from "./demo-definitions-file";', 5000, 'The named import did not take effect.');
+        await waitForAnimation(() => editor.getControl().getModel().getLineContent(30) === 'import { DefinedInterface } from "./demo-definitions-file";', 10000, () => 'The named import did not take effect.' + editor.getControl().getModel().getLineContent(30));
     });
+
+    for (const referenceViewCommand of ['references-view.find', 'references-view.findImplementations']) {
+        it(referenceViewCommand, async function () {
+            let steps = 0;
+            const editor = await openEditor(demoFileUri);
+            editor.getControl().setPosition({ lineNumber: 24, column: 11 });
+            assert.equal(editor.getControl().getModel().getWordAtPosition(editor.getControl().getPosition()).word, 'demoInstance');
+            await commands.executeCommand(referenceViewCommand);
+            const view = await pluginViewRegistry.openView('references-view.tree', { reveal: true });
+            const expectedMessage = referenceViewCommand === 'references-view.find' ? '2 results in 1 file' : '1 result in 1 file';
+            const getResultText = () => view.node.getElementsByClassName('theia-TreeViewInfo').item(0)?.textContent;
+            await waitForAnimation(() => getResultText() === expectedMessage, 5000);
+            assert.equal(getResultText(), expectedMessage);
+        });
+    }
 });

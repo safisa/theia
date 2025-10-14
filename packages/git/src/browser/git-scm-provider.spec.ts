@@ -21,7 +21,7 @@ import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/front
 FrontendApplicationConfigProvider.set({});
 
 import { CommandService, Disposable, ILogger, MessageService } from '@theia/core';
-import { LabelProvider } from '@theia/core/lib/browser';
+import { LabelProvider, OpenerService } from '@theia/core/lib/browser';
 import { FileUri } from '@theia/core/lib/node';
 import { Container } from '@theia/core/shared/inversify';
 import { EditorManager } from '@theia/editor/lib/browser';
@@ -31,7 +31,7 @@ import { expect } from 'chai';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
-import * as rimraf from 'rimraf';
+import { rimraf } from 'rimraf';
 import * as sinon from 'sinon';
 import { Git, GitFileStatus, Repository } from '../common';
 import { DugiteGit } from '../node/dugite-git';
@@ -39,13 +39,14 @@ import { DefaultGitEnvProvider, GitEnvProvider } from '../node/env/git-env-provi
 import { bindGit } from '../node/git-backend-module';
 import { GitRepositoryWatcher, GitRepositoryWatcherFactory } from '../node/git-repository-watcher';
 import { GitErrorHandler } from './git-error-handler';
-import { GitPreferences } from './git-preferences';
+import { GitPreferences } from '../common/git-preferences';
 import { GitScmProvider, GitScmProviderOptions } from './git-scm-provider';
 
 disableJSDOM();
 
 describe('GitScmProvider', () => {
     let testContainer: Container;
+    let mockOpenerService: OpenerService;
     let mockEditorManager: EditorManager;
     let mockGitErrorHandler: GitErrorHandler;
     let mockFileService: FileService;
@@ -65,6 +66,7 @@ describe('GitScmProvider', () => {
     });
 
     beforeEach(async () => {
+        mockOpenerService = {} as OpenerService;
         mockEditorManager = sinon.createStubInstance(EditorManager);
         mockGitErrorHandler = sinon.createStubInstance(GitErrorHandler);
         mockFileService = sinon.createStubInstance(FileService);
@@ -73,6 +75,7 @@ describe('GitScmProvider', () => {
         mockLabelProvider = sinon.createStubInstance(LabelProvider);
 
         testContainer = new Container();
+        testContainer.bind(OpenerService).toConstantValue(mockOpenerService);
         testContainer.bind(EditorManager).toConstantValue(mockEditorManager);
         testContainer.bind(GitErrorHandler).toConstantValue(mockGitErrorHandler);
         testContainer.bind(FileService).toConstantValue(mockFileService);
@@ -92,7 +95,7 @@ describe('GitScmProvider', () => {
         testContainer.bind(MessageService).toConstantValue(sinon.createStubInstance(MessageService));
         testContainer.bind(CommandService).toConstantValue(mockCommandService);
         testContainer.bind(LabelProvider).toConstantValue(mockLabelProvider);
-        testContainer.bind(GitPreferences).toConstantValue({ onPreferenceChanged: () => Disposable.NULL });
+        testContainer.rebind(GitPreferences).toConstantValue({ onPreferenceChanged: () => Disposable.NULL });
         testContainer.bind(GitScmProviderOptions).toConstantValue({
             repository
         } as GitScmProviderOptions);
@@ -106,12 +109,7 @@ describe('GitScmProvider', () => {
     });
 
     afterEach(async () => {
-        await new Promise<void>((resolve, reject) => rimraf(FileUri.fsPath(repository.localUri), error => {
-            if (error) {
-                reject(error);
-            }
-            resolve();
-        }));
+        await rimraf(FileUri.fsPath(repository.localUri));
     });
 
     it('should unstage all the changes', async () => {

@@ -33,7 +33,7 @@ import { TaskDefinitionRegistry } from './task-definition-registry';
 import { ProblemMatcherRegistry } from './task-problem-matcher-registry';
 import { ProblemPatternRegistry } from './task-problem-pattern-registry';
 import { TaskConfigurationManager } from './task-configuration-manager';
-import { bindTaskPreferences } from './task-preferences';
+import { bindTaskPreferences } from '../common/task-preferences';
 import '../../src/browser/style/index.css';
 import './tasks-monaco-contribution';
 import { TaskNameResolver } from './task-name-resolver';
@@ -42,6 +42,7 @@ import { TaskTemplateSelector } from './task-templates';
 import { TaskTerminalWidgetManager } from './task-terminal-widget-manager';
 import { JsonSchemaContribution } from '@theia/core/lib/browser/json-schema-store';
 import { QuickAccessContribution } from '@theia/core/lib/browser/quick-input/quick-access';
+import { TaskContextKeyService } from './task-context-key-service';
 
 export default new ContainerModule(bind => {
     bind(TaskFrontendContribution).toSelf().inSingletonScope();
@@ -80,6 +81,7 @@ export default new ContainerModule(bind => {
     bind(TaskSourceResolver).toSelf().inSingletonScope();
     bind(TaskTemplateSelector).toSelf().inSingletonScope();
     bind(TaskTerminalWidgetManager).toSelf().inSingletonScope();
+    bind(TaskContextKeyService).toSelf().inSingletonScope();
 
     bindProcessTaskModule(bind);
     bindTaskPreferences(bind);

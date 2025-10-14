@@ -14,6 +14,9 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
+const { timeout } = require('@theia/core/lib/common/promise-util');
+const { IOpenerService } = require('@theia/monaco-editor-core/esm/vs/platform/opener/common/opener');
+
 // @ts-check
 describe('Monaco API', async function () {
     this.timeout(5000);
@@ -26,13 +29,12 @@ describe('Monaco API', async function () {
     const { MonacoResolvedKeybinding } = require('@theia/monaco/lib/browser/monaco-resolved-keybinding');
     const { MonacoTextmateService } = require('@theia/monaco/lib/browser/textmate/monaco-textmate-service');
     const { CommandRegistry } = require('@theia/core/lib/common/command');
-    const { SimpleKeybinding } = require('@theia/monaco-editor-core/esm/vs/base/common/keybindings');
+    const { KeyCodeChord, ResolvedChord } = require('@theia/monaco-editor-core/esm/vs/base/common/keybindings');
     const { IKeybindingService } = require('@theia/monaco-editor-core/esm/vs/platform/keybinding/common/keybinding');
     const { StandaloneServices } = require('@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices');
     const { TokenizationRegistry } = require('@theia/monaco-editor-core/esm/vs/editor/common/languages');
     const { MonacoContextKeyService } = require('@theia/monaco/lib/browser/monaco-context-key-service');
     const { URI } = require('@theia/monaco-editor-core/esm/vs/base/common/uri');
-    const { animationFrame } = require('@theia/core/lib/browser/browser');
 
     const container = window.theia.container;
     const editorManager = container.get(EditorManager);
@@ -59,10 +61,10 @@ describe('Monaco API', async function () {
     });
 
     it('KeybindingService.resolveKeybinding', () => {
-        const simpleKeybinding = new SimpleKeybinding(true, true, true, true, 41 /* KeyCode.KeyK */);
-        const chordKeybinding = simpleKeybinding.toChord();
-        assert.equal(chordKeybinding.parts.length, 1);
-        assert.equal(chordKeybinding.parts[0], simpleKeybinding);
+        const chord = new KeyCodeChord(true, true, true, true, 41 /* KeyCode.KeyK */);
+        const chordKeybinding = chord.toKeybinding();
+        assert.equal(chordKeybinding.chords.length, 1);
+        assert.equal(chordKeybinding.chords[0], chord);
 
         const resolvedKeybindings = StandaloneServices.get(IKeybindingService).resolveKeybinding(chordKeybinding);
         assert.equal(resolvedKeybindings.length, 1);
@@ -74,9 +76,8 @@ describe('Monaco API', async function () {
             const electronAccelerator = resolvedKeybinding.getElectronAccelerator();
             const userSettingsLabel = resolvedKeybinding.getUserSettingsLabel();
             const WYSIWYG = resolvedKeybinding.isWYSIWYG();
-            const chord = resolvedKeybinding.isChord();
-            const parts = resolvedKeybinding.getParts();
-            const dispatchParts = resolvedKeybinding.getDispatchParts();
+            const parts = resolvedKeybinding.getChords();
+            const dispatchParts = resolvedKeybinding.getDispatchChords().map(str => str === null ? '' : str);
 
             const platform = window.navigator.platform;
             let expected;
@@ -88,15 +89,14 @@ describe('Monaco API', async function () {
                     electronAccelerator: 'Ctrl+Shift+Alt+Cmd+K',
                     userSettingsLabel: 'ctrl+shift+alt+cmd+K',
                     WYSIWYG: true,
-                    chord: false,
-                    parts: [{
-                        altKey: true,
-                        ctrlKey: true,
-                        keyAriaLabel: 'K',
-                        keyLabel: 'K',
-                        metaKey: true,
-                        shiftKey: true
-                    }],
+                    parts: [new ResolvedChord(
+                        true,
+                        true,
+                        true,
+                        true,
+                        'K',
+                        'K',
+                    )],
                     dispatchParts: [
                         'ctrl+shift+alt+meta+K'
                     ]
@@ -108,15 +108,14 @@ describe('Monaco API', async function () {
                     electronAccelerator: 'Ctrl+Shift+Alt+K',
                     userSettingsLabel: 'ctrl+shift+alt+K',
                     WYSIWYG: true,
-                    chord: false,
-                    parts: [{
-                        altKey: true,
-                        ctrlKey: true,
-                        keyAriaLabel: 'K',
-                        keyLabel: 'K',
-                        metaKey: false,
-                        shiftKey: true
-                    }],
+                    parts: [new ResolvedChord(
+                        true,
+                        true,
+                        true,
+                        false,
+                        'K',
+                        'K'
+                    )],
                     dispatchParts: [
                         'ctrl+shift+alt+K'
                     ]
@@ -124,7 +123,7 @@ describe('Monaco API', async function () {
             }
 
             assert.deepStrictEqual({
-                label, ariaLabel, electronAccelerator, userSettingsLabel, WYSIWYG, chord, parts, dispatchParts
+                label, ariaLabel, electronAccelerator, userSettingsLabel, WYSIWYG, parts, dispatchParts
             }, expected);
         } else {
             assert.fail(`resolvedKeybinding must be of ${MonacoResolvedKeybinding.name} type`);
@@ -136,7 +135,7 @@ describe('Monaco API', async function () {
             const didChangeColorMap = new Promise(resolve => {
                 const toDispose = TokenizationRegistry.onDidChange(() => {
                     toDispose.dispose();
-                    resolve();
+                    resolve(undefined);
                 });
             });
             textmateService['themeService'].setCurrentTheme('light');
@@ -152,14 +151,8 @@ describe('Monaco API', async function () {
     });
 
     it('OpenerService.open', async () => {
-        const hoverContribution = monacoEditor.getControl().getContribution('editor.contrib.hover');
-        assert.isDefined(hoverContribution);
-        if (!('_openerService' in hoverContribution)) {
-            assert.fail('hoverContribution does not have OpenerService');
-            return;
-        }
         /** @type {import('@theia/monaco-editor-core/esm/vs/editor/browser/services/openerService').OpenerService} */
-        const openerService = hoverContribution['_openerService'];
+        const openerService = StandaloneServices.get(IOpenerService);
 
         let opened = false;
         const id = '__test:OpenerService.open';
@@ -175,15 +168,15 @@ describe('Monaco API', async function () {
     });
 
     it('Supports setting contexts using the command registry', async () => {
-        const setContext = 'setContext';
+        const setContext = '_setContext';
         const key = 'monaco-api-test-context';
         const firstValue = 'first setting';
         const secondValue = 'second setting';
-        assert.isFalse(contextKeys.match(`${key} == ${firstValue}`));
+        assert.isFalse(contextKeys.match(`${key} == '${firstValue}'`));
         await commands.executeCommand(setContext, key, firstValue);
-        assert.isTrue(contextKeys.match(`${key} == ${firstValue}`));
+        assert.isTrue(contextKeys.match(`${key} == '${firstValue}'`));
         await commands.executeCommand(setContext, key, secondValue);
-        assert.isTrue(contextKeys.match(`${key} == ${secondValue}`));
+        assert.isTrue(contextKeys.match(`${key} == '${secondValue}'`));
     });
 
     it('Supports context key: inQuickOpen', async () => {
@@ -197,7 +190,7 @@ describe('Monaco API', async function () {
             assert.isTrue(contextKeys.match(inQuickOpenContextKey));
 
             await commands.executeCommand(CommandThatChangesFocus);
-            await animationFrame();
+            await timeout(0);
             assert.isFalse(contextKeys.match(inQuickOpenContextKey));
         }
     });

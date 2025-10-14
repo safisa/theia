@@ -39,19 +39,20 @@ import {
     EditorWidget, EditorOpenerOptions, FindMatch, Position
 } from '@theia/editor/lib/browser';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
-import { FileResourceResolver, FileSystemPreferences } from '@theia/filesystem/lib/browser';
+import { FileResourceResolver } from '@theia/filesystem/lib/browser';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { SearchInWorkspaceResult, SearchInWorkspaceOptions, SearchMatch } from '../common/search-in-workspace-interface';
 import { SearchInWorkspaceService } from './search-in-workspace-service';
 import { MEMORY_TEXT } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import * as React from '@theia/core/shared/react';
-import { SearchInWorkspacePreferences } from './search-in-workspace-preferences';
+import { SearchInWorkspacePreferences } from '../common/search-in-workspace-preferences';
 import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
-import * as minimatch from 'minimatch';
+import { minimatch, type MinimatchOptions } from 'minimatch';
 import { DisposableCollection } from '@theia/core/lib/common/disposable';
 import debounce = require('@theia/core/shared/lodash.debounce');
 import { nls } from '@theia/core/lib/common/nls';
+import { FileSystemPreferences } from '@theia/filesystem/lib/common';
 
 const ROOT_ID = 'ResultTree';
 
@@ -281,6 +282,79 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
         return true;
     }
 
+    selectNextResult(): void {
+        if (!this.model.getFocusedNode()) {
+            return this.selectFirstResult();
+        }
+        let foundNextResult = false;
+        while (!foundNextResult) {
+            const nextNode = this.model.getNextNode();
+            if (!nextNode) {
+                return this.selectFirstResult();
+            } else if (SearchInWorkspaceResultLineNode.is(nextNode)) {
+                foundNextResult = true;
+                this.selectExpandOpenResultNode(nextNode);
+            } else {
+                this.model.selectNext();
+            }
+        }
+    }
+
+    selectPreviousResult(): void {
+        if (!this.model.getFocusedNode()) {
+            return this.selectLastResult();
+        }
+        let foundSelectedNode = false;
+        while (!foundSelectedNode) {
+            const prevNode = this.model.getPrevNode();
+            if (!prevNode) {
+                return this.selectLastResult();
+            } else if (SearchInWorkspaceResultLineNode.is(prevNode)) {
+                foundSelectedNode = true;
+                this.selectExpandOpenResultNode(prevNode);
+            } else if (prevNode.id === 'ResultTree') {
+                return this.selectLastResult();
+            } else {
+                this.model.selectPrev();
+            }
+        }
+    }
+
+    protected selectExpandOpenResultNode(node: SearchInWorkspaceResultLineNode): void {
+        this.model.expandNode(node.parent.parent);
+        this.model.expandNode(node.parent);
+        this.model.selectNode(node);
+        this.model.openNode(node);
+    }
+
+    protected selectFirstResult(): void {
+        for (const rootFolder of this.resultTree.values()) {
+            for (const file of rootFolder.children) {
+                for (const result of file.children) {
+                    if (SelectableTreeNode.is(result)) {
+                        return this.selectExpandOpenResultNode(result);
+                    }
+                }
+            }
+        }
+    }
+
+    protected selectLastResult(): void {
+        const rootFolders = Array.from(this.resultTree.values());
+        for (let i = rootFolders.length - 1; i >= 0; i--) {
+            const rootFolder = rootFolders[i];
+            for (let j = rootFolder.children.length - 1; j >= 0; j--) {
+                const file = rootFolder.children[j];
+                for (let k = file.children.length - 1; k >= 0; k--) {
+                    const result = file.children[k];
+                    if (SelectableTreeNode.is(result)) {
+                        return this.selectExpandOpenResultNode(result);
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * Find matches for the given editor.
      * @param searchTerm the search term.
@@ -293,6 +367,7 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
         if (!widget.editor.document.findMatches) {
             return [];
         }
+
         const results: FindMatch[] = widget.editor.document.findMatches({
             searchString: searchTerm,
             isRegex: !!searchOptions.useRegExp,
@@ -345,7 +420,7 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
      * @param patterns the glob patterns to verify.
      */
     protected inPatternList(uri: URI, patterns: string[]): boolean {
-        const opts: minimatch.IOptions = { dot: true, matchBase: true };
+        const opts: MinimatchOptions = { dot: true, matchBase: true };
         return patterns.some(pattern => minimatch(
             uri.toString(),
             this.convertPatternToGlob(this.workspaceService.getWorkspaceRootUri(uri), pattern),
@@ -455,6 +530,7 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
 
         const fileUri = editorWidget.editor.uri.toString();
         const root: string | undefined = this.workspaceService.getWorkspaceRootUri(editorWidget.editor.uri)?.toString();
+
         return {
             root: root ?? this.defaultRootName,
             fileUri,
@@ -533,9 +609,11 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
         };
         this.resultTree.clear();
         this.forceVisibleRootNode = false;
+
         if (this.cancelIndicator) {
             this.cancelIndicator.cancel();
         }
+
         if (searchTerm === '') {
             this.refreshModelChildren();
             return;
@@ -544,14 +622,6 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
         const cancelIndicator = this.cancelIndicator;
         const token = this.cancelIndicator.token;
         const progress = await this.progressService.showProgress({ text: `search: ${searchTerm}`, options: { location: 'search' } });
-        token.onCancellationRequested(() => {
-            progress.cancel();
-            if (searchId) {
-                this.searchService.cancel(searchId);
-            }
-            this.cancelIndicator = undefined;
-            this.changeEmitter.fire(this.resultTree);
-        });
 
         // Collect search results for opened editors which otherwise may not be found by ripgrep (ex: dirty editors).
         const { numberOfResults, matches } = this.searchInOpenEditors(searchTerm, searchOptions);
@@ -572,24 +642,37 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
             searchOptions.maxResults -= numberOfResults;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let pendingRefreshTimeout: any;
+        let pendingRefreshTimeout: number | undefined;
+
         const searchId = await this.searchService.search(searchTerm, {
             onResult: (aSearchId: number, result: SearchInWorkspaceResult) => {
                 if (token.isCancellationRequested || aSearchId !== searchId) {
                     return;
                 }
+
                 this.appendToResultTree(result);
+
                 if (pendingRefreshTimeout) {
                     clearTimeout(pendingRefreshTimeout);
                 }
-                pendingRefreshTimeout = setTimeout(() => this.refreshModelChildren(), 100);
+
+                // convert type as we are in browser context
+                pendingRefreshTimeout = setTimeout(() => this.refreshModelChildren(), 100) as unknown as number;
             },
             onDone: () => {
                 this.handleSearchCompleted(cancelIndicator);
             }
         }, searchOptions).catch(() => {
             this.handleSearchCompleted(cancelIndicator);
+        });
+
+        token.onCancellationRequested(() => {
+            progress.cancel();
+            if (typeof searchId === 'number') {
+                this.searchService.cancel(searchId);
+            }
+            this.cancelIndicator = undefined;
+            this.changeEmitter.fire(this.resultTree);
         });
     }
 
@@ -976,15 +1059,18 @@ export class SearchInWorkspaceResultTreeWidget extends TreeWidget {
     }
 
     protected renderRootFolderNode(node: SearchInWorkspaceRootFolderNode): React.ReactNode {
+        const isRoot = node.path === '/' || node.path === `/${this.defaultRootName}`;
+        const name = this.toNodeName(node);
+
         return <div className='result'>
             <div className='result-head'>
                 <div className={`result-head-info noWrapInfo noselect ${node.selected ? 'selected' : ''}`}>
                     <span className={`file-icon ${this.toNodeIcon(node) || ''}`}></span>
                     <div className='noWrapInfo'>
                         <span className={'file-name'}>
-                            {this.toNodeName(node)}
+                            {name}
                         </span>
-                        {node.path !== '/' + this.defaultRootName &&
+                        {!isRoot &&
                             <span className={'file-path ' + TREE_NODE_INFO_CLASS}>
                                 {node.path}
                             </span>

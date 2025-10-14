@@ -18,7 +18,7 @@ import * as React from 'react';
 import { injectable, unmanaged } from 'inversify';
 import { Disposable } from '../../common';
 import { BaseWidget, Message } from './widget';
-import { Widget } from '@phosphor/widgets';
+import { Widget } from '@lumino/widgets';
 import { createRoot, Root } from 'react-dom/client';
 
 @injectable()
@@ -38,7 +38,9 @@ export abstract class ReactWidget extends BaseWidget {
 
     protected override onUpdateRequest(msg: Message): void {
         super.onUpdateRequest(msg);
-        this.nodeRoot.render(<React.Fragment>{this.render()}</React.Fragment>);
+        if (!this.isDisposed) {
+            this.nodeRoot.render(<React.Fragment>{this.render()}</React.Fragment>);
+        }
     }
 
     /**

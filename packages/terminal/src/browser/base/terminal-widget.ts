@@ -16,11 +16,12 @@
 
 import { Event, ViewColumn } from '@theia/core';
 import { BaseWidget } from '@theia/core/lib/browser';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering/markdown-string';
+import { ThemeIcon } from '@theia/core/lib/common/theme';
 import { CommandLineOptions } from '@theia/process/lib/common/shell-command-builder';
 import { TerminalSearchWidget } from '../search/terminal-search-widget';
 import { TerminalProcessInfo, TerminalExitReason } from '../../common/base-terminal-protocol';
 import URI from '@theia/core/lib/common/uri';
-import { MarkdownString } from '@theia/core/lib/common/markdown-rendering/markdown-string';
 
 export interface TerminalDimensions {
     cols: number;
@@ -46,6 +47,15 @@ export interface TerminalEditorLocation {
 
 export interface TerminalSplitLocation {
     readonly parentTerminal: string;
+}
+
+export interface TerminalBuffer {
+    readonly length: number;
+    /**
+     * @param start zero based index of the first line to return
+     * @param length the max number or lines to return
+     */
+    getLines(start: number, length: number): string[];
 }
 
 /**
@@ -118,6 +128,13 @@ export abstract class TerminalWidget extends BaseWidget {
     /** Event that fires when the terminal input data */
     abstract onData: Event<string>;
 
+    /** Event that fires when the terminal shell type is changed */
+    abstract onShellTypeChanged: Event<string>;
+
+    abstract onOutput: Event<string>;
+
+    abstract buffer: TerminalBuffer;
+
     abstract scrollLineUp(): void;
 
     abstract scrollLineDown(): void;
@@ -178,9 +195,9 @@ export interface TerminalWidgetOptions {
     readonly title?: string;
 
     /**
-     * icon class
+     * icon class with or without color modifier
      */
-    readonly iconClass?: string;
+    readonly iconClass?: string | ThemeIcon;
 
     /**
      * Path to the executable shell. For example: `/bin/bash`, `bash`, `sh`.
@@ -251,4 +268,18 @@ export interface TerminalWidgetOptions {
      * When enabled, the terminal will not be persisted across window reloads.
      */
     readonly isTransient?: boolean;
+
+    /**
+     * The nonce to use to verify shell integration sequences are coming from a trusted source.
+     * An example impact of UX of this is if the command line is reported with a nonce, it will
+     * not need to verify with the user that the command line is correct before rerunning it
+     * via the [shell integration command decoration](https://code.visualstudio.com/docs/terminal/shell-integration#_command-decorations-and-the-overview-ruler).
+     *
+     * This should be used if the terminal includes [custom shell integration support](https://code.visualstudio.com/docs/terminal/shell-integration#_supported-escape-sequences).
+     * It should be set to a random GUID which will then set the `VSCODE_NONCE` environment
+     * variable. Inside the shell, this should then be removed from the environment so as to
+     * protect it from general access. Once that is done it can be passed through in the
+     * relevant sequences to make them trusted.
+     */
+    readonly shellIntegrationNonce?: string;
 }

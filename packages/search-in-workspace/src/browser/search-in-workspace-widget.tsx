@@ -26,10 +26,11 @@ import { SearchInWorkspaceContextKeyService } from './search-in-workspace-contex
 import { CancellationTokenSource } from '@theia/core';
 import { ProgressBarFactory } from '@theia/core/lib/browser/progress-bar-factory';
 import { EditorManager } from '@theia/editor/lib/browser';
-import { SearchInWorkspacePreferences } from './search-in-workspace-preferences';
+import { SearchInWorkspacePreferences } from '../common/search-in-workspace-preferences';
 import { SearchInWorkspaceInput } from './components/search-in-workspace-input';
 import { SearchInWorkspaceTextArea } from './components/search-in-workspace-textarea';
 import { nls } from '@theia/core/lib/common/nls';
+import { Deferred } from '@theia/core/lib/common/promise-util';
 
 export interface SearchFieldState {
     className: string;
@@ -70,6 +71,8 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
     private replaceRef = React.createRef<SearchInWorkspaceTextArea>();
     private includeRef = React.createRef<SearchInWorkspaceInput>();
     private excludeRef = React.createRef<SearchInWorkspaceInput>();
+
+    private refsAreSet = new Deferred();
 
     protected _showReplaceField = false;
     protected get showReplaceField(): boolean {
@@ -346,18 +349,19 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         this.focusInputField();
     }
 
-    protected focusInputField(): void {
-        const f = document.getElementById('search-input-field');
-        if (f) {
-            (f as HTMLInputElement).focus();
-            (f as HTMLInputElement).select();
+    protected async focusInputField(): Promise<void> {
+        // Wait until React rendering is sufficiently progressed before trying to focus the input field.
+        await this.refsAreSet.promise;
+        if (this.searchRef.current?.textarea.current) {
+            this.searchRef.current.textarea.current.focus();
+            this.searchRef.current.textarea.current.select();
         }
     }
 
     protected renderSearchHeader(): React.ReactNode {
         const searchAndReplaceContainer = this.renderSearchAndReplace();
         const searchDetails = this.renderSearchDetails();
-        return <div>{searchAndReplaceContainer}{searchDetails}</div>;
+        return <div ref={() => this.refsAreSet.resolve()}>{searchAndReplaceContainer}{searchDetails}</div>;
     }
 
     protected renderSearchAndReplace(): React.ReactNode {
@@ -423,6 +427,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         const searchOnType = this.searchInWorkspacePreferences['search.searchOnType'];
         if (searchOnType) {
             const delay = this.searchInWorkspacePreferences['search.searchOnTypeDebouncePeriod'] || 0;
+
             window.clearTimeout(this._searchTimeout);
             this._searchTimeout = window.setTimeout(() => this.doSearch(e), delay);
         }
@@ -430,7 +435,6 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
 
     protected readonly onKeyDownSearch = (e: React.KeyboardEvent) => {
         if (Key.ENTER.keyCode === KeyCode.createKeyCode(e.nativeEvent).key?.keyCode) {
-            this.searchTerm = (e.target as HTMLInputElement).value;
             this.performSearch();
         }
     };
@@ -438,7 +442,8 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
     protected doSearch(e: React.KeyboardEvent): void {
         if (e.target) {
             const searchValue = (e.target as HTMLInputElement).value;
-            if (this.searchTerm === searchValue && Key.ENTER.keyCode !== KeyCode.createKeyCode(e.nativeEvent).key?.keyCode) {
+
+            if (this.searchTerm === searchValue) {
                 return;
             } else {
                 this.searchTerm = searchValue;
@@ -502,7 +507,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         </div>;
     }
     protected handleFocusSearchInputBox = (event: React.FocusEvent<HTMLTextAreaElement>) => {
-        event.target.placeholder = `${SearchInWorkspaceWidget.LABEL} (⇅ ${nls.localizeByDefault('for history')})`;
+        event.target.placeholder = SearchInWorkspaceWidget.LABEL + nls.localizeByDefault(' ({0} for history)', '⇅');
         this.contextKeyService.setSearchInputBoxFocus(true);
     };
     protected handleBlurSearchInputBox = (event: React.FocusEvent<HTMLTextAreaElement>) => {
@@ -541,7 +546,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
     }
 
     protected handleFocusReplaceInputBox = (event: React.FocusEvent<HTMLTextAreaElement>) => {
-        event.target.placeholder = `${nls.localizeByDefault('Replace')} (⇅ ${nls.localizeByDefault('for history')})`;
+        event.target.placeholder = nls.localizeByDefault('Replace') + nls.localizeByDefault(' ({0} for history)', '⇅');
         this.contextKeyService.setReplaceInputBoxFocus(true);
     };
     protected handleBlurReplaceInputBox = (event: React.FocusEvent<HTMLTextAreaElement>) => {

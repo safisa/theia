@@ -27,10 +27,12 @@ export class TextEditorExt implements theia.TextEditor {
     private _viewColumn: theia.ViewColumn | undefined;
     private _document: DocumentDataExt;
     private _options: TextEditorOptionsExt;
+    private _diffInformation: theia.TextEditorDiffInformation[] | undefined;
+
     private disposed = false;
     constructor(
         private readonly proxy: TextEditorsMain,
-        private readonly id: string,
+        readonly id: string,
         document: DocumentDataExt,
         private _selections: Selection[],
         options: TextEditorConfiguration,
@@ -274,6 +276,19 @@ export class TextEditorExt implements theia.TextEditor {
     hide(): void {
         this.proxy.$tryHideEditor(this.id);
     }
+
+    getDiffInformation(): Promise<theia.LineChange[]> {
+        return this.proxy.$getDiffInformation(this.id);
+    }
+
+    _acceptDiffInformation(diffInformation: theia.TextEditorDiffInformation[] | undefined): void {
+        // ok(!this._disposed);
+        this._diffInformation = diffInformation;
+    }
+
+    get diffInformation(): theia.TextEditorDiffInformation[] | undefined {
+        return this._diffInformation;
+    }
 }
 
 export class TextEditorOptionsExt implements theia.TextEditorOptions {
@@ -499,7 +514,7 @@ export interface TextEditOperation {
 export interface EditData {
     documentVersionId: number;
     edits: TextEditOperation[];
-    setEndOfLine: EndOfLine;
+    setEndOfLine: EndOfLine | undefined;
     undoStopBefore: boolean;
     undoStopAfter: boolean;
 }
@@ -507,13 +522,12 @@ export interface EditData {
 export class TextEditorEdit {
     private readonly documentVersionId: number;
     private collectedEdits: TextEditOperation[];
-    private eol: EndOfLine;
+    private eol: EndOfLine | undefined;
     private readonly undoStopBefore: boolean;
     private readonly undoStopAfter: boolean;
     constructor(private document: theia.TextDocument, options: { undoStopBefore: boolean; undoStopAfter: boolean }) {
         this.documentVersionId = document.version;
         this.collectedEdits = [];
-        this.eol = 0;
         this.undoStopBefore = options.undoStopBefore;
         this.undoStopAfter = options.undoStopAfter;
     }

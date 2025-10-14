@@ -19,23 +19,20 @@ import { postConstruct, injectable, inject } from '@theia/core/shared/inversify'
 import throttle = require('@theia/core/shared/lodash.throttle');
 import * as deepEqual from 'fast-deep-equal';
 import {
-    PreferenceService,
     CompositeTreeNode,
     SelectableTreeNode,
     StatefulWidget,
     TopDownTreeIterator,
-    PreferenceChanges,
     ExpandableTreeNode,
-    PreferenceSchemaProvider,
 } from '@theia/core/lib/browser';
-import { unreachable } from '@theia/core/lib/common';
+import { PreferenceChanges, PreferenceSchemaService, PreferenceService, unreachable } from '@theia/core/lib/common';
 import { BaseWidget, DEFAULT_SCROLL_OPTIONS } from '@theia/core/lib/browser/widgets/widget';
 import { PreferenceTreeModel, PreferenceFilterChangeEvent, PreferenceFilterChangeSource } from '../preference-tree-model';
 import { PreferenceNodeRendererFactory, GeneralPreferenceNodeRenderer } from './components/preference-node-renderer';
 import { Preference } from '../util/preference-types';
-import { COMMONLY_USED_SECTION_PREFIX } from '../util/preference-tree-generator';
 import { PreferencesScopeTabBar } from './preference-scope-tabbar-widget';
 import { PreferenceNodeRendererCreatorRegistry } from './components/preference-node-renderer-creator';
+import { COMMONLY_USED_SECTION_PREFIX } from '../util/preference-layout';
 
 export interface PreferencesEditorState {
     firstVisibleChildID: string,
@@ -68,7 +65,7 @@ export class PreferencesEditorWidget extends BaseWidget implements StatefulWidge
     @inject(PreferenceTreeModel) protected readonly model: PreferenceTreeModel;
     @inject(PreferenceNodeRendererFactory) protected readonly rendererFactory: PreferenceNodeRendererFactory;
     @inject(PreferenceNodeRendererCreatorRegistry) protected readonly rendererRegistry: PreferenceNodeRendererCreatorRegistry;
-    @inject(PreferenceSchemaProvider) protected readonly schemaProvider: PreferenceSchemaProvider;
+    @inject(PreferenceSchemaService) protected readonly schemaProvider: PreferenceSchemaService;
     @inject(PreferencesScopeTabBar) protected readonly tabbar: PreferencesScopeTabBar;
 
     @postConstruct()
@@ -112,12 +109,14 @@ export class PreferencesEditorWidget extends BaseWidget implements StatefulWidge
             this.handleSearchChange(isFiltered, leavesAreVisible);
         } else if (e.source === PreferenceFilterChangeSource.Scope) {
             this.handleScopeChange(isFiltered);
+            this.showInTree(currentFirstVisible);
         } else if (e.source === PreferenceFilterChangeSource.Schema) {
             this.handleSchemaChange(isFiltered);
+            this.showInTree(currentFirstVisible);
         } else {
             unreachable(e.source, 'Not all PreferenceFilterChangeSource enum variants handled.');
         }
-        this.resetScroll(currentFirstVisible, e.source === PreferenceFilterChangeSource.Search && !isFiltered);
+        this.resetScroll(currentFirstVisible, e.source === PreferenceFilterChangeSource.Search);
     }
 
     protected handleRegistryChange(): void {
@@ -235,18 +234,20 @@ export class PreferencesEditorWidget extends BaseWidget implements StatefulWidge
         }
     }
 
-    protected doResetScroll(nodeIDToScrollTo?: string, filterWasCleared: boolean = false): void {
+    protected doResetScroll(nodeIDToScrollTo?: string, filterWasModified: boolean = false): void {
         requestAnimationFrame(() => {
             this.scrollBar?.update();
-            if (!filterWasCleared && nodeIDToScrollTo) {
+            if (filterWasModified) {
+                this.scrollContainer.scrollTop = 0;
+            } else if (nodeIDToScrollTo) {
                 const { id, collection } = this.analyzeIDAndGetRendererGroup(nodeIDToScrollTo);
                 const renderer = collection.get(id);
                 if (renderer?.visible) {
-                    renderer.node.scrollIntoView();
+                    this.scrollContainer.scrollTo(0, renderer.node.offsetTop);
                     return;
                 }
             }
-            this.scrollContainer.scrollTop = 0;
+
         });
     };
 
@@ -275,29 +276,36 @@ export class PreferencesEditorWidget extends BaseWidget implements StatefulWidge
         }
     }
 
+    protected shouldUpdateModelSelection = true;
+
     protected setFirstVisibleChildID(id?: string): void {
         if (id && id !== this.firstVisibleChildID) {
             this.firstVisibleChildID = id;
-            let currentNode = this.model.getNode(id);
-            let expansionAncestor;
-            let selectionAncestor;
-            while (currentNode && (!expansionAncestor || !selectionAncestor)) {
-                if (!selectionAncestor && SelectableTreeNode.is(currentNode)) {
-                    selectionAncestor = currentNode;
-                }
-                if (!expansionAncestor && ExpandableTreeNode.is(currentNode)) {
-                    expansionAncestor = currentNode;
-                }
-                currentNode = currentNode.parent;
+            if (!this.shouldUpdateModelSelection) { return; }
+            this.showInTree(id);
+        }
+    }
+
+    protected showInTree(id: string): void {
+        let currentNode = this.model.getNode(id);
+        let expansionAncestor;
+        let selectionAncestor;
+        while (currentNode && (!expansionAncestor || !selectionAncestor)) {
+            if (!selectionAncestor && SelectableTreeNode.is(currentNode)) {
+                selectionAncestor = currentNode;
             }
-            if (selectionAncestor) {
-                this.currentModelSelectionId = selectionAncestor.id;
-                expansionAncestor = expansionAncestor ?? selectionAncestor;
-                this.model.selectIfNotSelected(selectionAncestor);
-                if (!this.model.isFiltered && id !== this.lastUserSelection) {
-                    this.lastUserSelection = '';
-                    this.model.collapseAllExcept(expansionAncestor);
-                }
+            if (!expansionAncestor && ExpandableTreeNode.is(currentNode)) {
+                expansionAncestor = currentNode;
+            }
+            currentNode = currentNode.parent;
+        }
+        if (selectionAncestor) {
+            this.currentModelSelectionId = selectionAncestor.id;
+            expansionAncestor = expansionAncestor ?? selectionAncestor;
+            this.model.selectIfNotSelected(selectionAncestor);
+            if (!this.model.isFiltered && id !== this.lastUserSelection) {
+                this.lastUserSelection = '';
+                this.model.collapseAllExcept(expansionAncestor);
             }
         }
     }
@@ -314,16 +322,24 @@ export class PreferencesEditorWidget extends BaseWidget implements StatefulWidge
                     if (renderer?.visible) {
                         // When filtered, treat the first visible child as the selected node, since it will be the one scrolled to.
                         this.lastUserSelection = renderer.nodeId;
-                        renderer.node.scrollIntoView();
+                        this.scrollWithoutModelUpdate(renderer.node);
                         return;
                     }
                 }
             } else {
                 const { id, collection } = this.analyzeIDAndGetRendererGroup(node.id);
                 const renderer = collection.get(id);
-                renderer?.node.scrollIntoView();
+                this.scrollWithoutModelUpdate(renderer?.node);
             }
         }
+    }
+
+    /** Ensures that we don't set the model's selection while attempting to scroll in reaction to a model selection change. */
+    protected scrollWithoutModelUpdate(node?: HTMLElement): void {
+        if (!node) { return; }
+        this.shouldUpdateModelSelection = false;
+        this.scrollContainer.scrollTo(0, node.offsetTop);
+        requestAnimationFrame(() => this.shouldUpdateModelSelection = true);
     }
 
     protected analyzeIDAndGetRendererGroup(nodeID: string): { id: string, group: string, collection: Map<string, GeneralPreferenceNodeRenderer> } {

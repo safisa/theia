@@ -16,7 +16,7 @@
 
 /* eslint-disable @theia/localization-check */
 
-import { inject, injectable } from '@theia/core/shared/inversify';
+import { inject, injectable, unmanaged } from '@theia/core/shared/inversify';
 import {
     AutoClosingPair,
     AutoClosingPairConditional,
@@ -62,22 +62,25 @@ import {
     Translation,
     PluginIdentifiers,
     TerminalProfile,
-    PluginIconContribution
+    PluginIconContribution,
+    PluginEntryPoint,
+    PluginPackageContribution
 } from '../../../common/plugin-protocol';
-import { promises as fs } from 'fs';
+import { promises as fs, readdirSync } from 'fs';
 import * as path from 'path';
-import { isObject, isStringArray, RecursivePartial } from '@theia/core/lib/common/types';
+import { isObject, isStringArray } from '@theia/core/lib/common/types';
 import { GrammarsReader } from './grammars-reader';
 import { CharacterPair } from '../../../common/plugin-api-rpc';
 import { isENOENT } from '../../../common/errors';
 import * as jsoncparser from 'jsonc-parser';
 import { IJSONSchema } from '@theia/core/lib/common/json-schema';
 import { deepClone } from '@theia/core/lib/common/objects';
-import { PreferenceSchema, PreferenceSchemaProperties } from '@theia/core/lib/common/preferences/preference-schema';
+import { PreferenceSchema, PreferenceDataProperty } from '@theia/core/lib/common/preferences/preference-schema';
 import { TaskDefinition } from '@theia/task/lib/common/task-protocol';
 import { ColorDefinition } from '@theia/core/lib/common/color';
 import { CSSIcon } from '@theia/core/lib/common/markdown-rendering/icon-utilities';
 import { PluginUriFactory } from './plugin-uri-factory';
+import { PreferenceScope } from '@theia/core/lib/common/preferences/preference-scope';
 
 const colorIdPattern = '^\\w+[.\\w+]*$';
 const iconIdPattern = `^${CSSIcon.iconNameSegment}(-${CSSIcon.iconNameSegment})+$`;
@@ -87,16 +90,67 @@ function getFileExtension(filePath: string): string {
     return index === -1 ? '' : filePath.substring(index + 1);
 }
 
-@injectable()
-export class TheiaPluginScanner implements PluginScanner {
+type PluginPackageWithContributes = PluginPackage & { contributes: PluginPackageContribution };
 
-    private readonly _apiType: PluginEngine = 'theiaPlugin';
+type ScopeString = 'machine-overridable' | 'window' | 'resource' | 'language-overridable' | 'application' | 'machine';
+
+type EditPresentationTypes = 'multilineText' | 'singleLineText';
+export interface IConfigurationPropertySchema extends IJSONSchema {
+
+    scope?: ScopeString;
+
+    /**
+     * When `false` this property is excluded from the registry. Default is to include.
+     */
+    included?: boolean;
+
+    /**
+     * List of tags associated to the property.
+     *  - A tag can be used for filtering
+     *  - Use `experimental` tag for marking the setting as experimental.
+     *  - Use `onExP` tag for marking that the default of the setting can be changed by running experiments.
+     */
+    tags?: string[];
+
+    /**
+     * When specified, controls the presentation format of string settings.
+     * Otherwise, the presentation format defaults to `singleline`.
+     */
+    editPresentation?: EditPresentationTypes;
+
+    /**
+     * When specified, gives an order number for the setting
+     * within the settings editor. Otherwise, the setting is placed at the end.
+     */
+    order?: number;
+
+}
+
+export interface IExtensionInfo {
+    id: string;
+    displayName?: string;
+}
+
+export interface IConfigurationNode {
+    title?: string;
+    description?: string;
+    properties?: Record<string, IConfigurationPropertySchema>;
+    scope?: ScopeString;
+}
+
+@injectable()
+export abstract class AbstractPluginScanner implements PluginScanner {
 
     @inject(GrammarsReader)
-    private readonly grammarsReader: GrammarsReader;
+    protected readonly grammarsReader: GrammarsReader;
 
     @inject(PluginUriFactory)
     protected readonly pluginUriFactory: PluginUriFactory;
+
+    constructor(
+        @unmanaged() private readonly _apiType: PluginEngine,
+        @unmanaged() private readonly _backendInitPath?: string) {
+    }
 
     get apiType(): PluginEngine {
         return this._apiType;
@@ -119,22 +173,49 @@ export class TheiaPluginScanner implements PluginScanner {
                 type: this._apiType,
                 version: plugin.engines[this._apiType]
             },
-            entryPoint: {
-                frontend: plugin.theiaPlugin!.frontend,
-                backend: plugin.theiaPlugin!.backend
-            }
+            entryPoint: this.getEntryPoint(plugin),
+            licenseUrl: this.getLicenseUrl(plugin),
+            readmeUrl: this.getReadmeUrl(plugin)
         };
         return result;
     }
 
+    protected getReadmeUrl(plugin: PluginPackage): string | undefined {
+        return this.getPluginRootFileUrl(plugin, ['readme.md', 'readme.txt', 'readme']);
+    }
+
+    protected getLicenseUrl(plugin: PluginPackage): string | undefined {
+        return this.getPluginRootFileUrl(plugin, ['license', 'license.txt', 'license.md']);
+    }
+
+    protected getPluginRootFileUrl(plugin: PluginPackage, names: string[]): string | undefined {
+        const nameSet = new Set(names.map(n => n.toLowerCase()));
+        try {
+            const dir = readdirSync(plugin.packagePath, { withFileTypes: true });
+            for (const dirent of dir) {
+                if (dirent.isFile() && nameSet.has(dirent.name.toLowerCase())) {
+                    return PluginPackage.toPluginUrl(plugin, dirent.name);
+                }
+            }
+        } catch {
+            return undefined;
+        }
+    }
+
+    protected abstract getEntryPoint(plugin: PluginPackage): PluginEntryPoint;
+
     getLifecycle(plugin: PluginPackage): PluginLifecycle {
-        return {
+        const result: PluginLifecycle = {
             startMethod: 'start',
             stopMethod: 'stop',
             frontendModuleName: buildFrontendModuleName(plugin),
-
-            backendInitPath: path.join(__dirname, 'backend-init-theia')
         };
+
+        if (this._backendInitPath) {
+            result.backendInitPath = path.join(__dirname, this._backendInitPath);
+        }
+
+        return result;
     }
 
     getDependencies(rawPlugin: PluginPackage): Map<string, string> | undefined {
@@ -155,13 +236,67 @@ export class TheiaPluginScanner implements PluginScanner {
             return contributions;
         }
 
+        return this.readContributions(rawPlugin as PluginPackageWithContributes, contributions);
+    }
+
+    protected async readContributions(rawPlugin: PluginPackageWithContributes, contributions: PluginContribution): Promise<PluginContribution> {
+        return contributions;
+    }
+
+}
+
+@injectable()
+export class TheiaPluginScanner extends AbstractPluginScanner {
+    constructor() {
+        super('theiaPlugin', 'backend-init-theia');
+    }
+
+    protected getEntryPoint(plugin: PluginPackage): PluginEntryPoint {
+        const result: PluginEntryPoint = {
+            frontend: plugin.theiaPlugin!.frontend,
+            backend: plugin.theiaPlugin!.backend
+        };
+        if (plugin.theiaPlugin?.headless) {
+            result.headless = plugin.theiaPlugin.headless;
+        }
+        return result;
+    }
+
+    static getScope(monacoScope: string | undefined): { scope: PreferenceScope | undefined, overridable: boolean } {
+        switch (monacoScope) {
+            case 'machine-overridable':
+            case 'window':
+            case 'resource':
+                return { scope: PreferenceScope.Folder, overridable: false };
+            case 'language-overridable':
+                return { scope: PreferenceScope.Folder, overridable: true };
+            case 'application':
+            case 'machine':
+                return { scope: PreferenceScope.User, overridable: false };
+        }
+        return { scope: undefined, overridable: false };
+    }
+
+    protected override async readContributions(rawPlugin: PluginPackageWithContributes, contributions: PluginContribution): Promise<PluginContribution> {
         try {
             if (rawPlugin.contributes.configuration) {
                 const configurations = Array.isArray(rawPlugin.contributes.configuration) ? rawPlugin.contributes.configuration : [rawPlugin.contributes.configuration];
+                const hasMultipleConfigs = configurations.length > 1;
                 contributions.configuration = [];
                 for (const c of configurations) {
                     const config = this.readConfiguration(c, rawPlugin.packagePath);
                     if (config) {
+                        Object.values(config.properties).forEach(property => {
+                            if (hasMultipleConfigs) {
+                                // If there are multiple configuration contributions, we need to distinguish them by their title in the settings UI.
+                                // They are placed directly under the plugin's name in the settings UI.
+                                property.owner = rawPlugin.displayName;
+                                property.group = config.title;
+                            } else {
+                                // If there's only one configuration contribution, we display the title in the settings UI.
+                                property.owner = config.title;
+                            }
+                        });
                         contributions.configuration.push(config);
                     }
                 }
@@ -171,7 +306,7 @@ export class TheiaPluginScanner implements PluginScanner {
         }
 
         const configurationDefaults = rawPlugin.contributes.configurationDefaults;
-        contributions.configurationDefaults = PreferenceSchemaProperties.is(configurationDefaults) ? configurationDefaults : undefined;
+        contributions.configurationDefaults = isObject(configurationDefaults) ? configurationDefaults : undefined;
 
         try {
             if (rawPlugin.contributes.submenus) {
@@ -307,13 +442,19 @@ export class TheiaPluginScanner implements PluginScanner {
         try {
             contributions.notebooks = rawPlugin.contributes.notebooks;
         } catch (err) {
-            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks'.`, rawPlugin.contributes.authentication, err);
+            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks'.`, rawPlugin.contributes.notebooks, err);
         }
 
         try {
             contributions.notebookRenderer = rawPlugin.contributes.notebookRenderer;
         } catch (err) {
-            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks'.`, rawPlugin.contributes.authentication, err);
+            console.error(`Could not read '${rawPlugin.name}' contribution 'notebook-renderer'.`, rawPlugin.contributes.notebookRenderer, err);
+        }
+
+        try {
+            contributions.notebookPreload = rawPlugin.contributes.notebookPreload;
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks-preload'.`, rawPlugin.contributes.notebookPreload, err);
         }
 
         try {
@@ -415,9 +556,9 @@ export class TheiaPluginScanner implements PluginScanner {
         return translation;
     }
 
-    protected readCommand({ command, title, original, category, icon, enablement }: PluginPackageCommand, pck: PluginPackage): PluginCommand {
+    protected readCommand({ command, title, shortTitle, original, category, icon, enablement }: PluginPackageCommand, pck: PluginPackage): PluginCommand {
         const { themeIcon, iconUrl } = this.transformIconUrl(pck, icon) ?? {};
-        return { command, title, originalTitle: original, category, iconUrl, themeIcon, enablement };
+        return { command, title, shortTitle, originalTitle: original, category, iconUrl, themeIcon, enablement };
     }
 
     protected transformIconUrl(plugin: PluginPackage, original?: IconUrl): { iconUrl?: IconUrl; themeIcon?: string } | undefined {
@@ -610,8 +751,28 @@ export class TheiaPluginScanner implements PluginScanner {
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    private readConfiguration(rawConfiguration: RecursivePartial<PreferenceSchema>, pluginPath: string): PreferenceSchema | undefined {
-        return PreferenceSchema.is(rawConfiguration) ? rawConfiguration : undefined;
+    private readConfiguration(rawConfiguration: IConfigurationNode, pluginPath: string): PreferenceSchema | undefined {
+        const { scope, overridable } = TheiaPluginScanner.getScope(rawConfiguration.scope);
+        const schema: PreferenceSchema = {
+            scope,
+            defaultOverridable: overridable,
+            title: rawConfiguration.title,
+            properties: {}
+        };
+
+        if (rawConfiguration.properties) {
+            for (const [key, property] of Object.entries(rawConfiguration.properties)) {
+                const scopeInfo = TheiaPluginScanner.getScope(property.scope);
+                const schemaProperty: PreferenceDataProperty = {
+                    ...property,
+                    scope: scopeInfo.scope,
+                    overridable: scopeInfo.overridable
+                };
+
+                schema.properties[key] = schemaProperty;
+            }
+        }
+        return schema;
     }
 
     private readKeybinding(rawKeybinding: PluginPackageKeybinding): Keybinding {
@@ -678,6 +839,7 @@ export class TheiaPluginScanner implements PluginScanner {
             view: rawViewWelcome.view,
             content: rawViewWelcome.contents,
             when: rawViewWelcome.when,
+            enablement: rawViewWelcome.enablement,
             // if the plugin contributes Welcome view to its own view - it will be ordered first
             order: pluginViewsIds.findIndex(v => v === rawViewWelcome.view) > -1 ? 0 : 1
         };

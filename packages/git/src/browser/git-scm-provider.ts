@@ -16,6 +16,7 @@
 
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
+import { open, OpenerService } from '@theia/core/lib/browser';
 import { DiffUris } from '@theia/core/lib/browser/diff-uris';
 import { Emitter } from '@theia/core';
 import { DisposableCollection } from '@theia/core/lib/common/disposable';
@@ -33,8 +34,9 @@ import { LabelProvider } from '@theia/core/lib/browser/label-provider';
 import { GitCommitDetailWidgetOptions } from './history/git-commit-detail-widget-options';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { ScmInput } from '@theia/scm/lib/browser/scm-input';
+import { MergeEditorOpenerOptions, MergeEditorSideWidgetState, MergeEditorUri } from '@theia/scm/lib/browser/merge-editor/merge-editor';
 import { nls } from '@theia/core/lib/common/nls';
-import { GitPreferences } from './git-preferences';
+import { GitPreferences } from '../common/git-preferences';
 
 @injectable()
 export class GitScmProviderOptions {
@@ -63,6 +65,9 @@ export class GitScmProvider implements ScmProvider {
         this.onDidChangeCommitTemplateEmitter,
         this.onDidChangeStatusBarCommandsEmitter
     );
+
+    @inject(OpenerService)
+    protected openerService: OpenerService;
 
     @inject(EditorManager)
     protected readonly editorManager: EditorManager;
@@ -223,9 +228,12 @@ export class GitScmProvider implements ScmProvider {
 
     async open(change: GitFileChange, options?: EditorOpenerOptions): Promise<void> {
         const uriToOpen = this.getUriToOpen(change);
-        await this.editorManager.open(uriToOpen, options);
+        await open(this.openerService, uriToOpen, options);
     }
 
+    // note: the implementation has to ensure that `GIT_RESOURCE_SCHEME` URIs it returns either directly or within a diff-URI always have a query;
+    // as an example of an issue that can otherwise arise, the VS Code `media-preview` plugin is known to mangle resource URIs without the query:
+    // https://github.com/microsoft/vscode/blob/6eaf6487a4d8301b981036bfa53976546eb6694f/extensions/media-preview/src/imagePreview/index.ts#L205-L209
     getUriToOpen(change: GitFileChange): URI {
         const changeUri: URI = new URI(change.uri);
         const fromFileUri = change.oldUri ? new URI(change.oldUri) : changeUri; // set oldUri on renamed and copied
@@ -233,14 +241,14 @@ export class GitScmProvider implements ScmProvider {
             if (change.staged) {
                 return changeUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('HEAD');
             } else {
-                return changeUri.withScheme(GIT_RESOURCE_SCHEME);
+                return changeUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('index');
             }
         }
         if (change.status !== GitFileStatus.New) {
             if (change.staged) {
                 return DiffUris.encode(
                     fromFileUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('HEAD'),
-                    changeUri.withScheme(GIT_RESOURCE_SCHEME),
+                    changeUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('index'),
                     nls.localize(
                         'theia/git/tabTitleIndex',
                         '{0} (Index)',
@@ -249,7 +257,7 @@ export class GitScmProvider implements ScmProvider {
             }
             if (this.stagedChanges.find(c => c.uri === change.uri)) {
                 return DiffUris.encode(
-                    fromFileUri.withScheme(GIT_RESOURCE_SCHEME),
+                    fromFileUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('index'),
                     changeUri,
                     nls.localize(
                         'theia/git/tabTitleWorkingTree',
@@ -270,11 +278,11 @@ export class GitScmProvider implements ScmProvider {
                 ));
         }
         if (change.staged) {
-            return changeUri.withScheme(GIT_RESOURCE_SCHEME);
+            return changeUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('index');
         }
         if (this.stagedChanges.find(c => c.uri === change.uri)) {
             return DiffUris.encode(
-                changeUri.withScheme(GIT_RESOURCE_SCHEME),
+                changeUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('index'),
                 changeUri,
                 nls.localize(
                     'theia/git/tabTitleWorkingTree',
@@ -301,6 +309,44 @@ export class GitScmProvider implements ScmProvider {
             return unstaged;
         }
         return this.stagedChanges.find(c => c.uri.toString() === stringUri);
+    }
+
+    async openMergeEditor(uri: URI): Promise<void> {
+        const baseUri = uri.withScheme(GIT_RESOURCE_SCHEME).withQuery(':1');
+        let side1Uri = uri.withScheme(GIT_RESOURCE_SCHEME).withQuery(':2');
+        let side2Uri = uri.withScheme(GIT_RESOURCE_SCHEME).withQuery(':3');
+        // eslint-disable-next-line @theia/localization-check -- need to create its own key instead of using localizeByDefault
+        let side1State: MergeEditorSideWidgetState = { title: nls.localize('theia/git/mergeEditor/currentSideTitle', 'Current') };
+        let side2State: MergeEditorSideWidgetState = { title: nls.localize('theia/git/mergeEditor/incomingSideTitle', 'Incoming') };
+        let isRebasing = false;
+        try {
+            const getCommitInfo = async (ref: string) => {
+                const hash = await this.git.revParse(this.repository, { ref });
+                if (hash) {
+                    const refNames = (await this.git.exec(this.repository, ['log', '-n', '1', '--decorate=full', '--format=%D', hash])).stdout.trim();
+                    return { hash, refNames };
+                }
+            };
+            const [head, mergeHead, rebaseHead] = await Promise.all([getCommitInfo('HEAD'), getCommitInfo('MERGE_HEAD'), getCommitInfo('REBASE_HEAD')]);
+            isRebasing = !!rebaseHead;
+            if (head) {
+                side1State.description = '$(git-commit) ' + head.hash.substring(0, 7);
+                side1State.detail = head.refNames.replace(/^HEAD -> /, '');
+            }
+            const rebaseOrMergeHead = rebaseHead || mergeHead;
+            if (rebaseOrMergeHead) {
+                side2State.description = '$(git-commit) ' + rebaseOrMergeHead.hash.substring(0, 7);
+                side2State.detail = rebaseOrMergeHead.refNames;
+            }
+        } catch (error) {
+            console.error(error);
+        }
+        if (!isRebasing) {
+            [side1Uri, side2Uri] = [side2Uri, side1Uri];
+            [side1State, side2State] = [side2State, side1State];
+        }
+        const options: MergeEditorOpenerOptions = { widgetState: { side1State, side2State } };
+        await open(this.openerService, MergeEditorUri.encode({ baseUri, side1Uri, side2Uri, resultUri: uri }), options);
     }
 
     async stageAll(): Promise<void> {

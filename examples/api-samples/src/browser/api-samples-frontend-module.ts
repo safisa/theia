@@ -29,6 +29,15 @@ import { bindMonacoPreferenceExtractor } from './monaco-editor-preferences/monac
 import { rebindOVSXClientFactory } from '../common/vsx/sample-ovsx-client-factory';
 import { bindSampleAppInfo } from './vsx/sample-frontend-app-info';
 import { bindTestSample } from './test/sample-test-contribution';
+import { bindSampleFileSystemCapabilitiesCommands } from './file-system/sample-file-system-capabilities';
+import { bindChatNodeToolbarActionContribution } from './chat/chat-node-toolbar-action-contribution';
+import { bindAskAndContinueChatAgentContribution } from './chat/ask-and-continue-chat-agent-contribution';
+import { bindChangeSetChatAgentContribution } from './chat/change-set-chat-agent-contribution';
+import { bindOriginalStateTestAgentContribution } from './chat/original-state-test-agent-contribution';
+import { bindSampleCodeCompletionVariableContribution } from './ai-code-completion/sample-code-completion-variable-contribution';
+import { bindSamplePreferenceContribution } from './preferences/sample-preferences-contribution';
+import { MCPFrontendContribution } from '@theia/ai-mcp-server/lib/browser/mcp-frontend-contribution';
+import { SampleFrontendMCPContribution } from './mcp/sample-frontend-mcp-contribution';
 
 export default new ContainerModule((
     bind: interfaces.Bind,
@@ -36,6 +45,10 @@ export default new ContainerModule((
     isBound: interfaces.IsBound,
     rebind: interfaces.Rebind,
 ) => {
+    bindAskAndContinueChatAgentContribution(bind);
+    bindChangeSetChatAgentContribution(bind);
+    bindOriginalStateTestAgentContribution(bind);
+    bindChatNodeToolbarActionContribution(bind);
     bindDynamicLabelProvider(bind);
     bindSampleUnclosableView(bind);
     bindSampleOutputChannelWithSeverity(bind);
@@ -47,5 +60,9 @@ export default new ContainerModule((
     bindMonacoPreferenceExtractor(bind);
     bindSampleAppInfo(bind);
     bindTestSample(bind);
+    bindSampleFileSystemCapabilitiesCommands(bind);
     rebindOVSXClientFactory(rebind);
+    bindSampleCodeCompletionVariableContribution(bind);
+    bindSamplePreferenceContribution(bind);
+    bind(MCPFrontendContribution).to(SampleFrontendMCPContribution).inSingletonScope();
 });

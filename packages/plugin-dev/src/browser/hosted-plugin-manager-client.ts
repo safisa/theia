@@ -25,7 +25,7 @@ import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { PluginDebugConfiguration, PluginDevServer } from '../common/plugin-dev-protocol';
 import { LaunchVSCodeArgument, LaunchVSCodeRequest, LaunchVSCodeResult } from '@theia/debug/lib/browser/debug-contribution';
 import { DebugSessionManager } from '@theia/debug/lib/browser/debug-session-manager';
-import { HostedPluginPreferences } from './hosted-plugin-preferences';
+import { HostedPluginPreferences } from '../common/hosted-plugin-preferences';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { DebugSessionConnection } from '@theia/debug/lib/browser/debug-session-connection';
@@ -248,7 +248,8 @@ export class HostedPluginManagerClient {
                 try {
                     if (this.isDebug) {
                         this.pluginInstanceURL = await this.hostedPluginServer.runDebugHostedPluginInstance(this.pluginLocation!.toString(), {
-                            debugMode: this.hostedPluginPreferences['hosted-plugin.debugMode']
+                            debugMode: this.hostedPluginPreferences['hosted-plugin.debugMode'],
+                            debugPort: [...this.hostedPluginPreferences['hosted-plugin.debugPorts']]
                         });
                         await this.startDebugSessionManager();
                     } else {
@@ -371,6 +372,9 @@ export class HostedPluginManagerClient {
         config = Object.assign(config || {}, { debugMode: this.hostedPluginPreferences['hosted-plugin.debugMode'] });
         if (config.pluginLocation) {
             this.pluginLocation = new URI((!config.pluginLocation.startsWith('/') ? '/' : '') + config.pluginLocation.replace(/\\/g, '/')).withScheme('file');
+        }
+        if (config.debugPort === undefined) {
+            config.debugPort = [...this.hostedPluginPreferences['hosted-plugin.debugPorts']];
         }
         return config;
     }

@@ -141,6 +141,14 @@ export class PluginDeployerImpl implements PluginDeployer {
         await this.pluginDeployerHandler.uninstallPlugin(pluginId);
     }
 
+    enablePlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean> {
+        return this.pluginDeployerHandler.enablePlugin(pluginId);
+    }
+
+    disablePlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean> {
+        return this.pluginDeployerHandler.disablePlugin(pluginId);
+    }
+
     async undeploy(pluginId: PluginIdentifiers.VersionedId): Promise<void> {
         if (await this.pluginDeployerHandler.undeployPlugin(pluginId)) {
             this.onDidDeployEmitter.fire();
@@ -225,8 +233,20 @@ export class PluginDeployerImpl implements PluginDeployer {
     }
 
     protected async resolveAndHandle(id: string, type: PluginType, options?: PluginDeployOptions): Promise<PluginDeployerEntry[]> {
-        const entries = await this.resolvePlugin(id, type, options);
-        await this.applyFileHandlers(entries);
+        let entries = await this.resolvePlugin(id, type, options);
+        if (type === PluginType.User) {
+            await this.applyFileHandlers(entries);
+        } else {
+            const filteredEntries: PluginDeployerEntry[] = [];
+            for (const entry of entries) {
+                if (await entry.isFile()) {
+                    this.logger.warn(`Only user plugins will be handled by file handlers, please unpack the plugin '${entry.id()}' manually.`);
+                } else {
+                    filteredEntries.push(entry);
+                }
+            }
+            entries = filteredEntries;
+        }
         await this.applyDirectoryFileHandlers(entries);
         return entries;
     }
@@ -271,24 +291,27 @@ export class PluginDeployerImpl implements PluginDeployer {
         const acceptedPlugins = pluginsToDeploy.filter(pluginDeployerEntry => pluginDeployerEntry.isAccepted());
         const acceptedFrontendPlugins = pluginsToDeploy.filter(pluginDeployerEntry => pluginDeployerEntry.isAccepted(PluginDeployerEntryType.FRONTEND));
         const acceptedBackendPlugins = pluginsToDeploy.filter(pluginDeployerEntry => pluginDeployerEntry.isAccepted(PluginDeployerEntryType.BACKEND));
+        const acceptedHeadlessPlugins = pluginsToDeploy.filter(pluginDeployerEntry => pluginDeployerEntry.isAccepted(PluginDeployerEntryType.HEADLESS));
 
         this.logger.debug('the accepted plugins are', acceptedPlugins);
         this.logger.debug('the acceptedFrontendPlugins plugins are', acceptedFrontendPlugins);
         this.logger.debug('the acceptedBackendPlugins plugins are', acceptedBackendPlugins);
+        this.logger.debug('the acceptedHeadlessPlugins plugins are', acceptedHeadlessPlugins);
 
         acceptedPlugins.forEach(plugin => {
             this.logger.debug('will deploy plugin', plugin.id(), 'with changes', JSON.stringify(plugin.getChanges()), 'and this plugin has been resolved by', plugin.resolvedBy());
         });
 
         // local path to launch
-        const pluginPaths = acceptedBackendPlugins.map(pluginEntry => pluginEntry.path());
+        const pluginPaths = [...acceptedBackendPlugins, ...acceptedHeadlessPlugins].map(pluginEntry => pluginEntry.path());
         this.logger.debug('local path to deploy on remote instance', pluginPaths);
 
-        const deployments = await Promise.all([
-            // start the backend plugins
-            this.pluginDeployerHandler.deployBackendPlugins(acceptedBackendPlugins),
-            this.pluginDeployerHandler.deployFrontendPlugins(acceptedFrontendPlugins)
-        ]);
+        const deployments = [];
+        // start the backend plugins
+        deployments.push(await this.pluginDeployerHandler.deployBackendPlugins(acceptedBackendPlugins));
+        // headless plugins are deployed like backend plugins
+        deployments.push(await this.pluginDeployerHandler.deployBackendPlugins(acceptedHeadlessPlugins));
+        deployments.push(await this.pluginDeployerHandler.deployFrontendPlugins(acceptedFrontendPlugins));
         this.onDidDeployEmitter.fire(undefined);
         return deployments.reduce<number>((accumulated, current) => accumulated += current ?? 0, 0);
     }

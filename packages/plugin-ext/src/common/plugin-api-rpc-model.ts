@@ -18,7 +18,7 @@ import * as theia from '@theia/plugin';
 import type * as monaco from '@theia/monaco-editor-core';
 import { MarkdownString as MarkdownStringDTO } from '@theia/core/lib/common/markdown-rendering';
 import { UriComponents } from './uri-components';
-import { CompletionItemTag, SnippetString } from '../plugin/types-impl';
+import { CompletionItemTag, DocumentPasteEditKind, SnippetString } from '../plugin/types-impl';
 import { Event as TheiaEvent } from '@theia/core/lib/common/event';
 import { URI } from '@theia/core/shared/vscode-uri';
 import { SerializedRegExp } from './plugin-api-rpc';
@@ -70,6 +70,17 @@ export interface Range {
      * Column on which the range ends in line `endLineNumber`.
      */
     readonly endColumn: number;
+}
+
+export interface Position {
+    /**
+     * line number (starts at 1)
+     */
+    readonly lineNumber: number,
+    /**
+     * column (starts at 1)
+     */
+    readonly column: number
 }
 
 export { MarkdownStringDTO as MarkdownString };
@@ -330,17 +341,17 @@ export interface DocumentDropEdit {
 }
 
 export interface DocumentDropEditProviderMetadata {
-    readonly id: string;
+    readonly providedDropEditKinds?: readonly DocumentPasteEditKind[];
     readonly dropMimeTypes: readonly string[];
 }
 
 export interface DataTransferFileDTO {
+    readonly id: string;
     readonly name: string;
     readonly uri?: UriComponents;
 }
 
 export interface DataTransferItemDTO {
-    readonly id: string;
     readonly asString: string;
     readonly fileData: DataTransferFileDTO | undefined;
     readonly uriListData?: ReadonlyArray<string | UriComponents>;
@@ -446,7 +457,7 @@ export interface WorkspaceEditMetadata {
     needsConfirmation: boolean;
     label: string;
     description?: string;
-    iconPath?: {
+    iconPath?: UriComponents | {
         id: string;
     } | {
         light: UriComponents;
@@ -718,7 +729,7 @@ export interface CommentThread {
     extensionId?: string;
     threadId: string;
     resource: string | null;
-    range: Range;
+    range: Range | undefined;
     label: string | undefined;
     contextValue: string | undefined;
     comments: Comment[] | undefined;
@@ -727,13 +738,13 @@ export interface CommentThread {
     state?: CommentThreadState;
     input?: CommentInput;
     onDidChangeInput: TheiaEvent<CommentInput | undefined>;
-    onDidChangeRange: TheiaEvent<Range>;
+    onDidChangeRange: TheiaEvent<Range | undefined>;
     onDidChangeLabel: TheiaEvent<string | undefined>;
     onDidChangeState: TheiaEvent<CommentThreadState | undefined>;
     onDidChangeCollapsibleState: TheiaEvent<CommentThreadCollapsibleState | undefined>;
     isDisposed: boolean;
-    canReply: boolean;
-    onDidChangeCanReply: TheiaEvent<boolean>;
+    canReply: boolean | theia.CommentAuthorInformation;
+    onDidChangeCanReply: TheiaEvent<boolean | theia.CommentAuthorInformation>;
 }
 
 export interface CommentThreadChangedEventMain extends CommentThreadChangedEvent {
@@ -760,6 +771,7 @@ export interface CommentThreadChangedEvent {
 export interface CommentingRanges {
     readonly resource: URI;
     ranges: Range[];
+    fileComments: boolean;
 }
 
 export interface CommentInfo {
@@ -895,3 +907,13 @@ export interface InlineCompletionsProvider<T extends InlineCompletions = InlineC
     freeInlineCompletions(completions: T): void;
 }
 
+export interface DebugStackFrameDTO {
+    readonly sessionId: string,
+    readonly frameId: number,
+    readonly threadId: number
+}
+
+export interface DebugThreadDTO {
+    readonly sessionId: string,
+    readonly threadId: number
+}

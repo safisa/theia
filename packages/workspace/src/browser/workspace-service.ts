@@ -14,33 +14,42 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
+import { injectable, inject, postConstruct, named } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
 import { WorkspaceServer, UntitledWorkspaceService, WorkspaceFileService } from '../common';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
 import { DEFAULT_WINDOW_HASH } from '@theia/core/lib/common/window';
 import {
-    FrontendApplicationContribution, PreferenceServiceImpl, PreferenceScope, PreferenceSchemaProvider, LabelProvider
+    FrontendApplicationContribution, LabelProvider
 } from '@theia/core/lib/browser';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
-import { ILogger, Disposable, DisposableCollection, Emitter, Event, MaybePromise, MessageService, nls } from '@theia/core';
-import { WorkspacePreferences } from './workspace-preferences';
+import { ILogger, Disposable, DisposableCollection, Emitter, Event, MaybePromise, MessageService, nls, ContributionProvider } from '@theia/core';
+import { WorkspacePreferences } from '../common/workspace-preferences';
 import * as jsoncparser from 'jsonc-parser';
 import * as Ajv from '@theia/core/shared/ajv';
 import { FileStat, BaseStat } from '@theia/filesystem/lib/common/files';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { WindowTitleService } from '@theia/core/lib/browser/window/window-title-service';
-import { FileSystemPreferences } from '@theia/filesystem/lib/browser';
+import { FileSystemPreferences } from '@theia/filesystem/lib/common';
 import { workspaceSchema, WorkspaceSchemaUpdater } from './workspace-schema-updater';
 import { IJSONSchema } from '@theia/core/lib/common/json-schema';
 import { StopReason } from '@theia/core/lib/common/frontend-application-state';
+import { PreferenceSchemaService, PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
+
+export const WorkspaceOpenHandlerContribution = Symbol('WorkspaceOpenHandlerContribution');
+
+export interface WorkspaceOpenHandlerContribution {
+    canHandle(uri: URI): MaybePromise<boolean>;
+    openWorkspace(uri: URI, options?: WorkspaceInput): MaybePromise<void>;
+    getWorkspaceLabel?(uri: URI): MaybePromise<string | undefined>;
+}
 
 /**
  * The workspace service.
  */
 @injectable()
-export class WorkspaceService implements FrontendApplicationContribution {
+export class WorkspaceService implements FrontendApplicationContribution, WorkspaceOpenHandlerContribution {
 
     protected _workspace: FileStat | undefined;
 
@@ -62,11 +71,11 @@ export class WorkspaceService implements FrontendApplicationContribution {
     @inject(WorkspacePreferences)
     protected preferences: WorkspacePreferences;
 
-    @inject(PreferenceServiceImpl)
-    protected readonly preferenceImpl: PreferenceServiceImpl;
+    @inject(PreferenceService)
+    protected readonly preferenceImpl: PreferenceService;
 
-    @inject(PreferenceSchemaProvider)
-    protected readonly schemaProvider: PreferenceSchemaProvider;
+    @inject(PreferenceSchemaService)
+    protected readonly schemaService: PreferenceSchemaService;
 
     @inject(EnvVariablesServer)
     protected readonly envVariableServer: EnvVariablesServer;
@@ -91,6 +100,9 @@ export class WorkspaceService implements FrontendApplicationContribution {
 
     @inject(WindowTitleService)
     protected readonly windowTitleService: WindowTitleService;
+
+    @inject(ContributionProvider) @named(WorkspaceOpenHandlerContribution)
+    protected readonly openHandlerContribution: ContributionProvider<WorkspaceOpenHandlerContribution>;
 
     protected _ready = new Deferred<void>();
     get ready(): Promise<void> {
@@ -350,7 +362,21 @@ export class WorkspaceService implements FrontendApplicationContribution {
         this.doOpen(uri, options);
     }
 
-    protected async doOpen(uri: URI, options?: WorkspaceInput): Promise<URI | undefined> {
+    protected async doOpen(uri: URI, options?: WorkspaceInput): Promise<void> {
+        for (const handler of [...this.openHandlerContribution.getContributions(), this]) {
+            if (await handler.canHandle(uri)) {
+                handler.openWorkspace(uri, options);
+                return;
+            }
+        }
+        throw new Error(`Could not find a handler to open the workspace with uri ${uri.toString()}.`);
+    }
+
+    async canHandle(uri: URI): Promise<boolean> {
+        return uri.scheme === 'file';
+    }
+
+    async openWorkspace(uri: URI, options?: WorkspaceInput): Promise<void> {
         const stat = await this.toFileStat(uri);
         if (stat) {
             if (!stat.isDirectory && !this.isWorkspaceFile(stat)) {
@@ -365,10 +391,6 @@ export class WorkspaceService implements FrontendApplicationContribution {
                 preserveWindow: this.preferences['workspace.preserveWindow'] || !this.opened,
                 ...options
             };
-            await this.server.setMostRecentlyUsedWorkspace(uri.toString());
-            if (preserveWindow) {
-                this._workspace = stat;
-            }
             this.openWindow(stat, Object.assign(options ?? {}, { preserveWindow }));
             return;
         }
@@ -466,7 +488,7 @@ export class WorkspaceService implements FrontendApplicationContribution {
             this._roots.length = 0;
 
             await this.server.setMostRecentlyUsedWorkspace('');
-            this.reloadWindow();
+            this.reloadWindow('');
         }
     }
 
@@ -504,25 +526,20 @@ export class WorkspaceService implements FrontendApplicationContribution {
         const workspacePath = uri.resource.path.toString();
 
         if (this.shouldPreserveWindow(options)) {
-            this.reloadWindow(options);
+            this.reloadWindow(workspacePath, options);
         } else {
             try {
                 this.openNewWindow(workspacePath, options);
             } catch (error) {
                 // Fall back to reloading the current window in case the browser has blocked the new window
-                this._workspace = uri;
-                this.logger.error(error.toString()).then(() => this.reloadWindow());
+                this.logger.error(error.toString()).then(() => this.reloadWindow(workspacePath));
             }
         }
     }
 
-    protected reloadWindow(options?: WorkspaceInput): void {
+    protected reloadWindow(workspacePath: string, options?: WorkspaceInput): void {
         // Set the new workspace path as the URL fragment.
-        if (this._workspace !== undefined) {
-            this.setURLFragment(this._workspace.resource.path.toString());
-        } else {
-            this.setURLFragment('');
-        }
+        this.setURLFragment(workspacePath);
 
         this.windowService.reload();
     }
@@ -578,10 +595,7 @@ export class WorkspaceService implements FrontendApplicationContribution {
         }
         const workspaceData: WorkspaceData = { folders: [], settings: {} };
         if (!this.saved) {
-            for (const p of Object.keys(this.schemaProvider.getCombinedSchema().properties)) {
-                if (this.schemaProvider.isValidInScope(p, PreferenceScope.Folder)) {
-                    continue;
-                }
+            for (const p of Object.keys(this.schemaService.getJSONSchema(PreferenceScope.Workspace).properties!)) {
                 const preferences = this.preferenceImpl.inspect(p);
                 if (preferences && preferences.workspaceValue) {
                     workspaceData.settings![p] = preferences.workspaceValue;
@@ -660,11 +674,27 @@ export class WorkspaceService implements FrontendApplicationContribution {
         const rootUris: URI[] = [];
         for (const root of this.tryGetRoots()) {
             const rootUri = root.resource;
-            if (rootUri && rootUri.isEqualOrParent(uri)) {
+            if (rootUri && rootUri.scheme === uri.scheme && rootUri.isEqualOrParent(uri)) {
                 rootUris.push(rootUri);
             }
         }
         return rootUris.sort((r1, r2) => r2.toString().length - r1.toString().length)[0];
+    }
+
+    /**
+     * Returns the relative path of the given file to the workspace root.
+     * @param uri URI of the file
+     * @see getWorkspaceRootUri(uri)
+     */
+    async getWorkspaceRelativePath(uri: URI): Promise<string> {
+        const wsUri = this.getWorkspaceRootUri(uri);
+        if (wsUri) {
+            const wsRelative = wsUri.relative(uri);
+            if (wsRelative) {
+                return wsRelative.toString();
+            }
+        }
+        return uri.path.fsPath();
     }
 
     areWorkspaceRoots(uris: URI[]): boolean {

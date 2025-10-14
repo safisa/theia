@@ -51,7 +51,9 @@ export class WebsocketFrontendConnectionService implements FrontendConnectionSer
             if (this.connectionsByFrontend.has(frontEndId)) {
                 this.closeConnection(frontEndId, 'reconnecting same front end');
             }
-            channelCreatedHandler(this.createConnection(socket, frontEndId));
+            const channel = this.createConnection(socket, frontEndId);
+            this.handleSocketDisconnect(socket, channel, frontEndId);
+            channelCreatedHandler(channel);
             socket.emit(ConnectionManagementMessages.INITIAL_CONNECT);
         };
 
@@ -63,6 +65,7 @@ export class WebsocketFrontendConnectionService implements FrontendConnectionSer
                 console.info(`Reconnecting to front end ${frontEndId}`);
                 socket.emit(ConnectionManagementMessages.RECONNECT, true);
                 channel.connect(socket);
+                this.handleSocketDisconnect(socket, channel, frontEndId);
                 const pendingTimeout = this.closeTimeouts.get(frontEndId);
                 clearTimeout(pendingTimeout);
                 this.closeTimeouts.delete(frontEndId);
@@ -89,15 +92,21 @@ export class WebsocketFrontendConnectionService implements FrontendConnectionSer
         connection.close();
     }
 
-    protected createConnection(socket: Socket, frontEndId: string): Channel {
+    protected createConnection(socket: Socket, frontEndId: string): ReconnectableSocketChannel {
         console.info(`creating connection for ${frontEndId}`);
         const channel = new ReconnectableSocketChannel();
         channel.connect(socket);
 
+        this.connectionsByFrontend.set(frontEndId, channel);
+        return channel;
+    }
+
+    handleSocketDisconnect(socket: Socket, channel: ReconnectableSocketChannel, frontEndId: string): void {
         socket.on('disconnect', evt => {
-            console.info('socked closed');
+            console.info('socket closed');
             channel.disconnect();
-            const timeout = BackendApplicationConfigProvider.get().frontendConnectionTimeout;
+
+            const timeout = this.frontendConnectionTimeout();
             const isMarkedForClose = this.channelsMarkedForClose.delete(frontEndId);
             if (timeout === 0 || isMarkedForClose) {
                 this.closeConnection(frontEndId, evt);
@@ -111,13 +120,19 @@ export class WebsocketFrontendConnectionService implements FrontendConnectionSer
                 // timeout < 0: never close the back end
             }
         });
-
-        this.connectionsByFrontend.set(frontEndId, channel);
-        return channel;
     }
 
     markForClose(channelId: string): void {
         this.channelsMarkedForClose.add(channelId);
+    }
+
+    private frontendConnectionTimeout(): number {
+        const envValue = Number(process.env['FRONTEND_CONNECTION_TIMEOUT']);
+        if (!isNaN(envValue)) {
+            return envValue;
+        }
+
+        return BackendApplicationConfigProvider.get().frontendConnectionTimeout;
     }
 }
 
@@ -168,4 +183,3 @@ class ReconnectableSocketChannel extends AbstractChannel {
         return writeBuffer;
     }
 }
-

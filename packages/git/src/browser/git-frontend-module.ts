@@ -30,7 +30,7 @@ import { bindGitHistoryModule } from './history/git-history-frontend-module';
 import { GitResourceResolver } from './git-resource-resolver';
 import { GitRepositoryProvider } from './git-repository-provider';
 import { GitQuickOpenService } from './git-quick-open-service';
-import { bindGitPreferences } from './git-preferences';
+import { bindGitPreferences } from '../common/git-preferences';
 import { bindDirtyDiff } from './dirty-diff/dirty-diff-module';
 import { bindBlame } from './blame/blame-module';
 import { GitRepositoryTracker } from './git-repository-tracker';
@@ -43,6 +43,9 @@ import { ScmHistorySupport } from '@theia/scm-extra/lib/browser/history/scm-hist
 import { ScmHistoryProvider } from '@theia/scm-extra/lib/browser/history';
 import { GitHistorySupport } from './history/git-history-support';
 import { GitDecorationProvider } from './git-decoration-provider';
+import { GitFileSystemProvider } from './git-file-system-provider';
+import { GitFileServiceContribution } from './git-file-service-contribution';
+import { FileServiceContribution } from '@theia/filesystem/lib/browser/file-service';
 
 export default new ContainerModule(bind => {
     bindGitPreferences(bind);
@@ -75,6 +78,10 @@ export default new ContainerModule(bind => {
 
     bind(GitSyncService).toSelf().inSingletonScope();
     bind(GitErrorHandler).toSelf().inSingletonScope();
+
+    bind(GitFileSystemProvider).toSelf().inSingletonScope();
+    bind(GitFileServiceContribution).toDynamicValue(ctx => new GitFileServiceContribution(ctx.container)).inSingletonScope();
+    bind(FileServiceContribution).toService(GitFileServiceContribution);
 });
 
 export function createGitScmProviderFactory(ctx: interfaces.Context): GitScmProvider.Factory {

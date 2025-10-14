@@ -20,10 +20,10 @@ import { URI as Uri } from '@theia/core/shared/vscode-uri';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
 import { Emitter } from '@theia/core/lib/common/event';
-import { FileSystemPreferences } from '@theia/filesystem/lib/browser';
-import { EditorManager, EditorPreferences } from '@theia/editor/lib/browser';
+import { FileSystemPreferences } from '@theia/filesystem/lib/common';
+import { EditorManager } from '@theia/editor/lib/browser';
 import { MonacoTextModelService } from './monaco-text-model-service';
-import { WillSaveMonacoModelEvent, MonacoEditorModel, MonacoModelContentChangedEvent } from './monaco-editor-model';
+import { MonacoEditorModel, MonacoModelContentChangedEvent } from './monaco-editor-model';
 import { MonacoEditor } from './monaco-editor';
 import { ProblemManager } from '@theia/markers/lib/browser';
 import { ArrayUtils } from '@theia/core/lib/common/types';
@@ -42,6 +42,8 @@ import { SnippetParser } from '@theia/monaco-editor-core/esm/vs/editor/contrib/s
 import { TextEdit } from '@theia/monaco-editor-core/esm/vs/editor/common/languages';
 import { SnippetController2 } from '@theia/monaco-editor-core/esm/vs/editor/contrib/snippet/browser/snippetController2';
 import { isObject, MaybePromise, nls } from '@theia/core/lib/common';
+import { SaveableService } from '@theia/core/lib/browser';
+import { EditorPreferences } from '@theia/editor/lib/common/editor-preferences';
 
 export namespace WorkspaceFileEdit {
     export function is(arg: Edit): arg is monaco.languages.IWorkspaceFileEdit {
@@ -100,9 +102,6 @@ export class MonacoWorkspace {
     protected readonly onDidChangeTextDocumentEmitter = new Emitter<MonacoModelContentChangedEvent>();
     readonly onDidChangeTextDocument = this.onDidChangeTextDocumentEmitter.event;
 
-    protected readonly onWillSaveTextDocumentEmitter = new Emitter<WillSaveMonacoModelEvent>();
-    readonly onWillSaveTextDocument = this.onWillSaveTextDocumentEmitter.event;
-
     protected readonly onDidSaveTextDocumentEmitter = new Emitter<MonacoEditorModel>();
     readonly onDidSaveTextDocument = this.onDidSaveTextDocumentEmitter.event;
 
@@ -123,6 +122,9 @@ export class MonacoWorkspace {
 
     @inject(ProblemManager)
     protected readonly problems: ProblemManager;
+
+    @inject(SaveableService)
+    protected readonly saveService: SaveableService;
 
     @postConstruct()
     protected init(): void {
@@ -156,7 +158,6 @@ export class MonacoWorkspace {
         });
         model.onDidChangeContent(event => this.fireDidChangeContent(event));
         model.onDidSaveModel(() => this.fireDidSave(model));
-        model.onWillSaveModel(event => this.fireWillSave(event));
         model.onDirtyChanged(() => this.openEditorIfDirty(model));
         model.onDispose(() => this.fireDidClose(model));
     }
@@ -171,10 +172,6 @@ export class MonacoWorkspace {
 
     protected fireDidChangeContent(event: MonacoModelContentChangedEvent): void {
         this.onDidChangeTextDocumentEmitter.fire(event);
-    }
-
-    protected fireWillSave(event: WillSaveMonacoModelEvent): void {
-        this.onWillSaveTextDocumentEmitter.fire(event);
     }
 
     protected fireDidSave(model: MonacoEditorModel): void {
@@ -192,7 +189,7 @@ export class MonacoWorkspace {
             // acquired by the editor, thus losing the changes that made it dirty.
             this.textModelService.createModelReference(model.textEditorModel.uri).then(ref => {
                 (
-                    model.autoSave !== 'off' ? new Promise(resolve => model.onDidSaveModel(resolve)) :
+                    this.saveService.autoSave !== 'off' ? new Promise(resolve => model.onDidSaveModel(resolve)) :
                         this.editorManager.open(new URI(model.uri), { mode: 'open' })
                 ).then(
                     () => ref.dispose()
@@ -217,20 +214,22 @@ export class MonacoWorkspace {
      * Applies given edits to the given model.
      * The model is saved if no editors is opened for it.
      */
-    applyBackgroundEdit(model: MonacoEditorModel, editOperations: monaco.editor.IIdentifiedSingleEditOperation[], shouldSave = true): Promise<void> {
+    applyBackgroundEdit(model: MonacoEditorModel, editOperations: monaco.editor.IIdentifiedSingleEditOperation[],
+        shouldSave?: boolean | ((openEditor: MonacoEditor | undefined, wasDirty: boolean) => boolean)): Promise<void> {
         return this.suppressOpenIfDirty(model, async () => {
             const editor = MonacoEditor.findByDocument(this.editorManager, model)[0];
+            const wasDirty = !!editor?.document.dirty;
             const cursorState = editor && editor.getControl().getSelections() || [];
             model.textEditorModel.pushStackElement();
             model.textEditorModel.pushEditOperations(cursorState, editOperations, () => cursorState);
             model.textEditorModel.pushStackElement();
-            if (!editor && shouldSave) {
+            if ((typeof shouldSave === 'function' && shouldSave(editor, wasDirty)) || (!editor && shouldSave)) {
                 await model.save();
             }
         });
     }
 
-    async applyBulkEdit(edits: ResourceEdit[], options?: IBulkEditOptions): Promise<IBulkEditResult & { success: boolean }> {
+    async applyBulkEdit(edits: ResourceEdit[], options?: IBulkEditOptions): Promise<IBulkEditResult> {
         try {
             let totalEdits = 0;
             let totalFiles = 0;
@@ -264,12 +263,12 @@ export class MonacoWorkspace {
             }
 
             const ariaSummary = this.getAriaSummary(totalEdits, totalFiles);
-            return { ariaSummary, success: true };
+            return { ariaSummary, isApplied: true };
         } catch (e) {
             console.error('Failed to apply Resource edits:', e);
             return {
                 ariaSummary: `Error applying Resource edits: ${e.toString()}`,
-                success: false
+                isApplied: false
             };
         }
     }
@@ -369,27 +368,27 @@ export class MonacoWorkspace {
             const options = edit.options || {};
             if (edit.newResource && edit.oldResource) {
                 // rename
-                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(new URI(edit.newResource))) {
+                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(URI.fromComponents(edit.newResource))) {
                     return; // not overwriting, but ignoring, and the target file exists
                 }
-                await this.fileService.move(new URI(edit.oldResource), new URI(edit.newResource), { overwrite: options.overwrite });
+                await this.fileService.move(URI.fromComponents(edit.oldResource), URI.fromComponents(edit.newResource), { overwrite: options.overwrite });
             } else if (!edit.newResource && edit.oldResource) {
                 // delete file
-                if (await this.fileService.exists(new URI(edit.oldResource))) {
+                if (await this.fileService.exists(URI.fromComponents(edit.oldResource))) {
                     let useTrash = this.filePreferences['files.enableTrash'];
-                    if (useTrash && !(this.fileService.hasCapability(new URI(edit.oldResource), FileSystemProviderCapabilities.Trash))) {
+                    if (useTrash && !(this.fileService.hasCapability(URI.fromComponents(edit.oldResource), FileSystemProviderCapabilities.Trash))) {
                         useTrash = false; // not supported by provider
                     }
-                    await this.fileService.delete(new URI(edit.oldResource), { useTrash, recursive: options.recursive });
+                    await this.fileService.delete(URI.fromComponents(edit.oldResource), { useTrash, recursive: options.recursive });
                 } else if (!options.ignoreIfNotExists) {
                     throw new Error(`${edit.oldResource} does not exist and can not be deleted`);
                 }
             } else if (edit.newResource && !edit.oldResource) {
                 // create file
-                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(new URI(edit.newResource))) {
+                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(URI.fromComponents(edit.newResource))) {
                     return; // not overwriting, but ignoring, and the target file exists
                 }
-                await this.fileService.create(new URI(edit.newResource), undefined, { overwrite: options.overwrite });
+                await this.fileService.create(URI.fromComponents(edit.newResource), undefined, { overwrite: options.overwrite });
             }
         }
     }

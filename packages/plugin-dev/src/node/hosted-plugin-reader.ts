@@ -18,9 +18,8 @@ import { inject, injectable } from '@theia/core/shared/inversify';
 import { BackendApplicationContribution } from '@theia/core/lib/node/backend-application';
 import { HostedPluginReader as PluginReaderHosted } from '@theia/plugin-ext/lib/hosted/node/plugin-reader';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { PluginMetadata } from '@theia/plugin-ext/lib/common/plugin-protocol';
+import { PluginDeployerHandler, PluginMetadata } from '@theia/plugin-ext/lib/common/plugin-protocol';
 import { PluginDeployerEntryImpl } from '@theia/plugin-ext/lib/main/node/plugin-deployer-entry-impl';
-import { HostedPluginDeployerHandler } from '@theia/plugin-ext/lib/hosted/node/hosted-plugin-deployer-handler';
 
 @injectable()
 export class HostedPluginReader implements BackendApplicationContribution {
@@ -30,8 +29,8 @@ export class HostedPluginReader implements BackendApplicationContribution {
 
     private readonly hostedPlugin = new Deferred<PluginMetadata | undefined>();
 
-    @inject(HostedPluginDeployerHandler)
-    protected deployerHandler: HostedPluginDeployerHandler;
+    @inject(PluginDeployerHandler)
+    protected deployerHandler: PluginDeployerHandler;
 
     async initialize(): Promise<void> {
         this.pluginReader.getPluginMetadata(process.env.HOSTED_PLUGIN)
@@ -42,7 +41,7 @@ export class HostedPluginReader implements BackendApplicationContribution {
             const hostedPlugin = new PluginDeployerEntryImpl('Hosted Plugin', pluginPath!, pluginPath);
             hostedPlugin.storeValue('isUnderDevelopment', true);
             const hostedMetadata = await this.hostedPlugin.promise;
-            if (hostedMetadata!.model.entryPoint && hostedMetadata!.model.entryPoint.backend) {
+            if (hostedMetadata!.model.entryPoint && (hostedMetadata!.model.entryPoint.backend || hostedMetadata!.model.entryPoint.headless)) {
                 this.deployerHandler.deployBackendPlugins([hostedPlugin]);
             }
 

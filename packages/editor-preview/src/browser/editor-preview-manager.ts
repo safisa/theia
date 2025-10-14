@@ -16,12 +16,13 @@
 
 import { EditorManager, EditorOpenerOptions, EditorWidget } from '@theia/editor/lib/browser';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
-import { EditorPreviewPreferences } from './editor-preview-preferences';
+import { EditorPreviewPreferences } from '../common/editor-preview-preferences';
 import { MaybePromise } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import { EditorPreviewWidgetFactory, EditorPreviewOptions } from './editor-preview-widget-factory';
 import { EditorPreviewWidget } from './editor-preview-widget';
 import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
+import { WidgetOpenerOptions } from '@theia/core/lib/browser';
 
 @injectable()
 export class EditorPreviewManager extends EditorManager {
@@ -70,10 +71,10 @@ export class EditorPreviewManager extends EditorManager {
         document.addEventListener('dblclick', this.convertEditorOnDoubleClick.bind(this));
     }
 
-    protected override async doOpen(widget: EditorPreviewWidget, options?: EditorOpenerOptions): Promise<void> {
+    protected override async doOpen(widget: EditorPreviewWidget, uri: URI, options?: EditorOpenerOptions): Promise<void> {
         const { preview, widgetOptions = { area: 'main' }, mode = 'activate' } = options ?? {};
         if (!widget.isAttached) {
-            this.shell.addWidget(widget, widgetOptions);
+            await this.shell.addWidget(widget, widgetOptions);
         } else if (!preview && widget.isPreview) {
             widget.convertToNonPreview();
         }
@@ -83,6 +84,7 @@ export class EditorPreviewManager extends EditorManager {
         } else if (mode === 'reveal') {
             await this.shell.revealWidget(widget.id);
         }
+        await this.revealSelection(widget, uri, options);
     }
 
     protected handleNewPreview(newPreviewWidget: EditorPreviewWidget): void {
@@ -99,11 +101,12 @@ export class EditorPreviewManager extends EditorManager {
     }
 
     protected override tryGetPendingWidget(uri: URI, options?: EditorOpenerOptions): MaybePromise<EditorWidget> | undefined {
-        return super.tryGetPendingWidget(uri, { ...options, preview: true }) ?? super.tryGetPendingWidget(uri, { ...options, preview: false });
+        return super.tryGetPendingWidget(uri, { ...options, preview: true } as WidgetOpenerOptions) ??
+            super.tryGetPendingWidget(uri, { ...options, preview: false } as WidgetOpenerOptions);
     }
 
     protected override async getWidget(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget | undefined> {
-        return (await super.getWidget(uri, { ...options, preview: true })) ?? super.getWidget(uri, { ...options, preview: false });
+        return (await super.getWidget(uri, { ...options, preview: true } as WidgetOpenerOptions)) ?? super.getWidget(uri, { ...options, preview: false } as WidgetOpenerOptions);
     }
 
     protected override async getOrCreateWidget(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget> {

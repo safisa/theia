@@ -15,7 +15,7 @@
 // *****************************************************************************
 
 import { ContainerModule, interfaces } from '@theia/core/shared/inversify';
-import { CommandContribution, MenuContribution } from '@theia/core/lib/common';
+import { CommandContribution, MenuContribution, bindContributionProvider } from '@theia/core/lib/common';
 import { WebSocketConnectionProvider, FrontendApplicationContribution, KeybindingContribution } from '@theia/core/lib/browser';
 import {
     OpenFileDialogFactory,
@@ -32,12 +32,12 @@ import { LabelProviderContribution } from '@theia/core/lib/browser/label-provide
 import { VariableContribution } from '@theia/variable-resolver/lib/browser';
 import { WorkspaceServer, workspacePath, UntitledWorkspaceService, WorkspaceFileService } from '../common';
 import { WorkspaceFrontendContribution } from './workspace-frontend-contribution';
-import { WorkspaceService } from './workspace-service';
+import { WorkspaceOpenHandlerContribution, WorkspaceService } from './workspace-service';
 import { WorkspaceCommandContribution, FileMenuContribution, EditMenuContribution } from './workspace-commands';
 import { WorkspaceVariableContribution } from './workspace-variable-contribution';
 import { WorkspaceStorageService } from './workspace-storage-service';
 import { WorkspaceUriLabelProviderContribution } from './workspace-uri-contribution';
-import { bindWorkspacePreferences } from './workspace-preferences';
+import { bindWorkspacePreferences } from '../common/workspace-preferences';
 import { QuickOpenWorkspace } from './quick-open-workspace';
 import { WorkspaceDeleteHandler } from './workspace-delete-handler';
 import { WorkspaceDuplicateHandler } from './workspace-duplicate-handler';
@@ -49,7 +49,7 @@ import { WorkspaceSchemaUpdater } from './workspace-schema-updater';
 import { WorkspaceBreadcrumbsContribution } from './workspace-breadcrumbs-contribution';
 import { FilepathBreadcrumbsContribution } from '@theia/filesystem/lib/browser/breadcrumbs/filepath-breadcrumbs-contribution';
 import { WorkspaceTrustService } from './workspace-trust-service';
-import { bindWorkspaceTrustPreferences } from './workspace-trust-preferences';
+import { bindWorkspaceTrustPreferences } from '../common/workspace-trust-preferences';
 import { UserWorkingDirectoryProvider } from '@theia/core/lib/browser/user-working-directory-provider';
 import { WorkspaceUserWorkingDirectoryProvider } from './workspace-user-working-directory-provider';
 import { WindowTitleUpdater } from '@theia/core/lib/browser/window/window-title-updater';
@@ -59,9 +59,11 @@ import { CanonicalUriService } from './canonical-uri-service';
 export default new ContainerModule((bind: interfaces.Bind, unbind: interfaces.Unbind, isBound: interfaces.IsBound, rebind: interfaces.Rebind) => {
     bindWorkspacePreferences(bind);
     bindWorkspaceTrustPreferences(bind);
+    bindContributionProvider(bind, WorkspaceOpenHandlerContribution);
 
     bind(WorkspaceService).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(WorkspaceService);
+
     bind(CanonicalUriService).toSelf().inSingletonScope();
     bind(WorkspaceServer).toDynamicValue(ctx => {
         const provider = ctx.container.get(WebSocketConnectionProvider);

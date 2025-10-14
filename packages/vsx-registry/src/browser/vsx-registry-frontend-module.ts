@@ -18,7 +18,9 @@ import '../../src/browser/style/index.css';
 
 import { ContainerModule } from '@theia/core/shared/inversify';
 import {
-    WidgetFactory, bindViewContribution, FrontendApplicationContribution, ViewContainerIdentifier, OpenHandler, WidgetManager, WebSocketConnectionProvider
+    WidgetFactory, bindViewContribution, FrontendApplicationContribution, ViewContainerIdentifier, OpenHandler, WidgetManager, WebSocketConnectionProvider,
+    WidgetStatusBarContribution,
+    noopWidgetStatusBarContribution
 } from '@theia/core/lib/browser';
 import { VSXExtensionsViewContainer } from './vsx-extensions-view-container';
 import { VSXExtensionsContribution } from './vsx-extensions-contribution';
@@ -31,11 +33,16 @@ import { VSXExtensionEditor } from './vsx-extension-editor';
 import { VSXExtensionEditorManager } from './vsx-extension-editor-manager';
 import { VSXExtensionsSourceOptions } from './vsx-extensions-source';
 import { VSXExtensionsSearchModel } from './vsx-extensions-search-model';
-import { bindExtensionPreferences } from './recommended-extensions/recommended-extensions-preference-contribution';
+import { bindExtensionPreferences } from '../common/recommended-extensions-preference-contribution';
 import { bindPreferenceProviderOverrides } from './recommended-extensions/preference-provider-overrides';
+import { bindVsxExtensionsPreferences } from './vsx-extensions-preferences';
 import { VSXEnvironment, VSX_ENVIRONMENT_PATH } from '../common/vsx-environment';
 import { LanguageQuickPickService } from '@theia/core/lib/browser/i18n/language-quick-pick-service';
 import { VSXLanguageQuickPickService } from './vsx-language-quick-pick-service';
+import { VsxExtensionArgumentProcessor } from './vsx-extension-argument-processor';
+import { ArgumentProcessorContribution } from '@theia/plugin-ext/lib/main/browser/command-registry-main';
+import { ExtensionSchemaContribution } from './recommended-extensions/recommended-extensions-json-schema';
+import { JsonSchemaContribution } from '@theia/core/lib/browser/json-schema-store';
 
 export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bind(VSXEnvironment)
@@ -61,6 +68,7 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
     })).inSingletonScope();
     bind(VSXExtensionEditorManager).toSelf().inSingletonScope();
     bind(OpenHandler).toService(VSXExtensionEditorManager);
+    bind(WidgetStatusBarContribution).toConstantValue(noopWidgetStatusBarContribution(VSXExtensionEditor));
 
     bind(WidgetFactory).toDynamicValue(({ container }) => ({
         id: VSXExtensionsWidget.ID,
@@ -75,6 +83,7 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
                 progressLocationId: 'extensions'
             });
             child.bind(VSXExtensionsViewContainer).toSelf();
+            child.bind(VSXExtensionsSearchBar).toSelf().inSingletonScope();
             const viewContainer = child.get(VSXExtensionsViewContainer);
             const widgetManager = child.get(WidgetManager);
             for (const id of [
@@ -93,7 +102,6 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
     })).inSingletonScope();
 
     bind(VSXExtensionsSearchModel).toSelf().inSingletonScope();
-    bind(VSXExtensionsSearchBar).toSelf().inSingletonScope();
 
     rebind(LanguageQuickPickService).to(VSXLanguageQuickPickService).inSingletonScope();
 
@@ -103,4 +111,11 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
 
     bindExtensionPreferences(bind);
     bindPreferenceProviderOverrides(bind, unbind);
+    bindVsxExtensionsPreferences(bind);
+
+    bind(VsxExtensionArgumentProcessor).toSelf().inSingletonScope();
+    bind(ArgumentProcessorContribution).toService(VsxExtensionArgumentProcessor);
+
+    bind(ExtensionSchemaContribution).toSelf().inSingletonScope();
+    bind(JsonSchemaContribution).toService(ExtensionSchemaContribution);
 });

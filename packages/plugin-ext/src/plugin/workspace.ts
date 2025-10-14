@@ -21,6 +21,7 @@
 
 import * as paths from 'path';
 import * as theia from '@theia/plugin';
+import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { Event, Emitter } from '@theia/core/lib/common/event';
 import { CancellationToken } from '@theia/core/lib/common/cancellation';
 import {
@@ -37,16 +38,34 @@ import { EditorsAndDocumentsExtImpl } from './editors-and-documents';
 import { Disposable, URI } from './types-impl';
 import { normalize } from '@theia/core/lib/common/paths';
 import { relative } from '../common/paths-util';
-import { Schemes } from '../common/uri-components';
+import { Schemes, UriComponents } from '../common/uri-components';
 import { toWorkspaceFolder } from './type-converters';
 import { MessageRegistryExt } from './message-registry';
 import * as Converter from './type-converters';
 import { FileStat } from '@theia/filesystem/lib/common/files';
 import { isUndefinedOrNull, isUndefined } from '../common/types';
+import { PluginLogger } from './logger';
+import { consumeStream } from '@theia/core/lib/common/stream';
+import { EncodingService } from '@theia/core/lib/common/encoding-service';
+import { BinaryBuffer, BinaryBufferReadableStream } from '@theia/core/lib/common/buffer';
 
+@injectable()
 export class WorkspaceExtImpl implements WorkspaceExt {
 
+    @inject(RPCProtocol)
+    protected readonly rpc: RPCProtocol;
+
+    @inject(EditorsAndDocumentsExtImpl)
+    protected editorsAndDocuments: EditorsAndDocumentsExtImpl;
+
+    @inject(MessageRegistryExt)
+    protected messageService: MessageRegistryExt;
+
     private proxy: WorkspaceMain;
+    private logger: PluginLogger;
+
+    @inject(EncodingService)
+    protected encodingService: EncodingService;
 
     private workspaceFoldersChangedEmitter = new Emitter<theia.WorkspaceFoldersChangeEvent>();
     public readonly onDidChangeWorkspaceFolders: Event<theia.WorkspaceFoldersChangeEvent> = this.workspaceFoldersChangedEmitter.event;
@@ -63,10 +82,10 @@ export class WorkspaceExtImpl implements WorkspaceExt {
 
     private canonicalUriProviders = new Map<string, theia.CanonicalUriProvider>();
 
-    constructor(rpc: RPCProtocol,
-        private editorsAndDocuments: EditorsAndDocumentsExtImpl,
-        private messageService: MessageRegistryExt) {
-        this.proxy = rpc.getProxy(Ext.WORKSPACE_MAIN);
+    @postConstruct()
+    initialize(): void {
+        this.proxy = this.rpc.getProxy(Ext.WORKSPACE_MAIN);
+        this.logger = new PluginLogger(this.rpc, 'workspace');
     }
 
     get rootPath(): string | undefined {
@@ -178,8 +197,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
         });
     }
 
-    findFiles(include: theia.GlobPattern, exclude?: theia.GlobPattern | null, maxResults?: number,
-        token: CancellationToken = CancellationToken.None): PromiseLike<URI[]> {
+    findFiles(include: theia.GlobPattern, exclude?: theia.GlobPattern | null, maxResults?: number, token: CancellationToken = CancellationToken.None): PromiseLike<URI[]> {
         let includePattern: string;
         let includeFolderUri: string | undefined;
         if (include) {
@@ -193,25 +211,29 @@ export class WorkspaceExtImpl implements WorkspaceExt {
             includePattern = '';
         }
 
-        let excludePatternOrDisregardExcludes: string | false;
-        if (exclude === undefined) {
-            excludePatternOrDisregardExcludes = ''; // default excludes
-        } else if (exclude) {
+        let excludeString: string = '';
+        let useFileExcludes = true;
+        if (exclude === null) {
+            useFileExcludes = false;
+        } else if (exclude !== undefined) {
             if (typeof exclude === 'string') {
-                excludePatternOrDisregardExcludes = exclude;
+                excludeString = exclude;
             } else {
-                excludePatternOrDisregardExcludes = exclude.pattern;
+                excludeString = exclude.pattern;
             }
-        } else {
-            excludePatternOrDisregardExcludes = false; // no excludes
         }
 
         if (token && token.isCancellationRequested) {
             return Promise.resolve([]);
         }
 
-        return this.proxy.$startFileSearch(includePattern, includeFolderUri, excludePatternOrDisregardExcludes, maxResults, token)
-            .then(data => Array.isArray(data) ? data.map(uri => URI.revive(uri)) : []);
+        return this.proxy.$startFileSearch(includePattern, includeFolderUri, {
+            maxResults,
+            exclude: excludeString,
+            useDefaultExcludes: useFileExcludes,
+            useDefaultSearchExcludes: false,
+            useIgnoreFiles: false
+        }, token).then(data => Array.isArray(data) ? data.map(uri => URI.revive(uri)) : []);
     }
 
     findTextInFiles(query: theia.TextSearchQuery, optionsOrCallback: theia.FindTextInFilesOptions | ((result: theia.TextSearchResult) => void),
@@ -254,7 +276,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
             throw new Error(`Text Content Document Provider for scheme '${scheme}' is already registered`);
         } else if (this.documentContentProviders.has(scheme)) {
             // TODO: we should be able to handle multiple registrations, but for now we should ensure that it doesn't crash plugin activation.
-            console.warn(`Repeat registration of TextContentDocumentProvider for scheme '${scheme}'. This registration will be ignored.`);
+            this.logger.warn(`Repeat registration of TextContentDocumentProvider for scheme '${scheme}'. This registration will be ignored.`);
             return { dispose: () => { } };
         }
 
@@ -459,7 +481,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
 
         this.canonicalUriProviders.set(scheme, provider);
         this.proxy.$registerCanonicalUriProvider(scheme).catch(e => {
-            console.error(`Canonical URI provider for scheme: '${scheme}' already exists globally`);
+            this.logger.error(`Canonical URI provider for scheme: '${scheme}' already exists globally`);
             this.canonicalUriProviders.delete(scheme);
         });
         const result = Disposable.create(() => { this.proxy.$unregisterCanonicalUriProvider(scheme); });
@@ -468,7 +490,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
 
     $disposeCanonicalUriProvider(scheme: string): void {
         if (!this.canonicalUriProviders.delete(scheme)) {
-            console.warn(`No canonical uri provider registered for '${scheme}'`);
+            this.logger.warn(`diposeCanonicalUriProvider: No canonical uri provider registered for '${scheme}'`);
         }
     }
 
@@ -481,7 +503,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
         const parsed = URI.parse(uri);
         const provider = this.canonicalUriProviders.get(parsed.scheme);
         if (!provider) {
-            console.warn(`No canonical uri provider registered for '${parsed.scheme}'`);
+            this.logger.warn(`provideCanonicalUri: No canonical uri provider registered for '${parsed.scheme}'`);
             return undefined;
         }
         const result = await provider.provideCanonicalUri(parsed, { targetScheme: targetScheme }, token);
@@ -491,5 +513,37 @@ export class WorkspaceExtImpl implements WorkspaceExt {
     /** @stubbed */
     $registerEditSessionIdentityProvider(scheme: string, provider: theia.EditSessionIdentityProvider): theia.Disposable {
         return Disposable.NULL;
+    }
+
+    async decode(content: Uint8Array, args?: { uri?: theia.Uri; encoding?: string }): Promise<string> {
+        const [uri, opts] = this.asEncodeDecodeParameters(args);
+        const { preferredEncoding, guessEncoding } = await this.proxy.$resolveDecoding(uri, opts);
+        const decodeStreamOptions = {
+            guessEncoding,
+            overwriteEncoding: (detectedEncoding: string | undefined) => {
+                if (detectedEncoding === null || detectedEncoding === preferredEncoding) {
+                    return Promise.resolve(preferredEncoding);
+                }
+
+                return this.proxy.$getValidEncoding(uri, detectedEncoding, opts);
+            }
+        };
+        const stream = (await this.encodingService.decodeStream(BinaryBufferReadableStream.fromBuffer(BinaryBuffer.wrap(content)), decodeStreamOptions)).stream;
+        return consumeStream(stream, s => s.join(''));
+
+    }
+
+    async encode(content: string, args?: { uri?: theia.Uri; encoding?: string }): Promise<Uint8Array> {
+        const [uri, options] = this.asEncodeDecodeParameters(args);
+        const { encoding, hasBOM } = await this.proxy.$resolveEncoding(uri, options);
+        const buffer = this.encodingService.encode(content, { encoding, hasBOM });
+        return buffer.buffer;
+    }
+
+    private asEncodeDecodeParameters(opts?: { uri?: theia.Uri; encoding?: string }): [UriComponents | undefined, { encoding: string } | undefined] {
+        const uri = Converter.isUriComponents(opts?.uri) ? opts.uri : undefined;
+        const encoding = typeof opts?.encoding === 'string' ? opts.encoding : undefined;
+
+        return [uri, encoding ? { encoding } : undefined];
     }
 }

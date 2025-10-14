@@ -15,23 +15,25 @@
 // *****************************************************************************
 
 import { inject, injectable, postConstruct } from 'inversify';
-import { Command, CommandContribution, CommandRegistry, isOSX, isWindows, MenuModelRegistry, MenuContribution, Disposable, nls } from '../../common';
 import {
-    codicon, ConfirmDialog, KeybindingContribution, KeybindingRegistry, PreferenceScope, Widget,
-    FrontendApplication, FrontendApplicationContribution, CommonMenus, CommonCommands, Dialog, Message, ApplicationShell,
+    Command, CommandContribution, CommandRegistry, isOSX, isWindows, MenuModelRegistry,
+    MenuContribution, Disposable, nls, PreferenceScope, PreferenceService
+} from '../../common';
+import {
+    codicon, ConfirmDialog, KeybindingContribution, KeybindingRegistry, Widget,
+    FrontendApplication, FrontendApplicationContribution, CommonMenus, CommonCommands, Dialog, Message, ApplicationShell, animationFrame,
 } from '../../browser';
 import { ElectronMainMenuFactory } from './electron-main-menu-factory';
 import { FrontendApplicationStateService, FrontendApplicationState } from '../../browser/frontend-application-state';
 import { FrontendApplicationConfigProvider } from '../../browser/frontend-application-config-provider';
-import { ZoomLevel } from '../window/electron-window-preferences';
+import { ZoomLevel } from '../../electron-common/electron-window-preferences';
 import { BrowserMenuBarContribution } from '../../browser/menu/browser-menu-plugin';
 import { WindowService } from '../../browser/window/window-service';
 import { WindowTitleService } from '../../browser/window/window-title-service';
 
 import '../../../src/electron-browser/menu/electron-menu-style.css';
-import { MenuDto } from '../../electron-common/electron-api';
 import { ThemeService } from '../../browser/theming';
-import { ThemeChangeEvent } from '../../common/theme';
+import { getThemeMode, ThemeChangeEvent } from '../../common/theme';
 
 export namespace ElectronCommands {
     export const TOGGLE_DEVELOPER_TOOLS = Command.toDefaultLocalizedCommand({
@@ -121,10 +123,7 @@ export class ElectronMenuContribution extends BrowserMenuBarContribution impleme
             }
         };
         onStateChange = this.stateService.onStateChanged(stateServiceListener);
-        this.shell.mainPanel.onDidToggleMaximized(() => {
-            this.handleToggleMaximized();
-        });
-        this.shell.bottomPanel.onDidToggleMaximized(() => {
+        this.shell.onDidToggleMaximized(() => {
             this.handleToggleMaximized();
         });
         this.attachMenuBarVisibilityListener();
@@ -146,7 +145,7 @@ export class ElectronMenuContribution extends BrowserMenuBarContribution impleme
     protected attachMenuBarVisibilityListener(): void {
         this.preferenceService.onPreferenceChanged(e => {
             if (e.preferenceName === 'window.menuBarVisibility') {
-                this.handleFullScreen(e.newValue);
+                this.handleFullScreen(e.newValue as string);
             }
         });
     }
@@ -168,7 +167,7 @@ export class ElectronMenuContribution extends BrowserMenuBarContribution impleme
         this.preferenceService.onPreferenceChanged(change => {
             if (change.preferenceName === 'window.titleBarStyle') {
                 if (this.titleBarStyleChangeFlag && this.titleBarStyle !== change.newValue) {
-                    window.electronTheiaCore.setTitleBarStyle(change.newValue);
+                    window.electronTheiaCore.setTitleBarStyle(change.newValue as string);
                     this.handleRequiredRestart();
                 }
                 this.titleBarStyleChangeFlag = true;
@@ -186,16 +185,16 @@ export class ElectronMenuContribution extends BrowserMenuBarContribution impleme
     /**
      * Hides the `theia-top-panel` depending on the selected `titleBarStyle`.
      * The `theia-top-panel` is used as the container of the main, application menu-bar for the
-     * browser. Native Electron has it's own.
+     * browser. Native Electron has its own.
      * By default, this method is called on application `onStart`.
      */
     protected hideTopPanel(app: FrontendApplication): void {
         const itr = app.shell.children();
         let child = itr.next();
-        while (child) {
+        while (!child.done) {
             // Top panel for the menu contribution is not required for native Electron title bar.
-            if (child.id === 'theia-top-panel') {
-                child.setHidden(this.titleBarStyle !== 'custom');
+            if (child.value.id === 'theia-top-panel') {
+                child.value.setHidden(this.titleBarStyle !== 'custom');
                 break;
             } else {
                 child = itr.next();
@@ -203,7 +202,7 @@ export class ElectronMenuContribution extends BrowserMenuBarContribution impleme
         }
     }
 
-    protected setMenu(app: FrontendApplication, electronMenu: MenuDto[] | undefined = this.factory.createElectronMenuBar()): void {
+    protected setMenu(app: FrontendApplication): void {
         if (!isOSX) {
             this.hideTopPanel(app);
             if (this.titleBarStyle === 'custom' && !this.menuBar) {
@@ -211,7 +210,7 @@ export class ElectronMenuContribution extends BrowserMenuBarContribution impleme
                 return;
             }
         }
-        window.electronTheiaCore.setMenu(electronMenu);
+        this.factory.setMenuBar();
     }
 
     protected createCustomTitleBar(app: FrontendApplication): void {
@@ -425,6 +424,7 @@ export class ElectronMenuContribution extends BrowserMenuBarContribution impleme
     protected handleThemeChange(e: ThemeChangeEvent): void {
         const backgroundColor = window.getComputedStyle(document.body).backgroundColor;
         window.electronTheiaCore.setBackgroundColor(backgroundColor);
+        window.electronTheiaCore.setTheme(getThemeMode(e.newTheme.type));
     }
 
 }
@@ -441,6 +441,9 @@ export class CustomTitleWidget extends Widget {
     @inject(ApplicationShell)
     protected readonly applicationShell: ApplicationShell;
 
+    @inject(PreferenceService)
+    protected readonly preferenceService: PreferenceService;
+
     constructor() {
         super();
         this.id = 'theia-custom-title';
@@ -451,6 +454,11 @@ export class CustomTitleWidget extends Widget {
         this.updateTitle(this.windowTitleService.title);
         this.windowTitleService.onDidChangeTitle(title => {
             this.updateTitle(title);
+        });
+        this.preferenceService.onPreferenceChanged(e => {
+            if (e.preferenceName === 'window.menuBarVisibility') {
+                animationFrame().then(() => this.adjustTitleToCenter());
+            }
         });
     }
 

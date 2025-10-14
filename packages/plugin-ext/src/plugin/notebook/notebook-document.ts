@@ -26,8 +26,8 @@ import { Disposable, URI } from '@theia/core';
 import * as typeConverters from '../type-converters';
 import { ModelAddedData, NotebookCellDto, NotebookCellsChangedEventDto, NotebookModelAddedData, NotebookOutputDto } from '../../common';
 import { NotebookRange } from '../types-impl';
-import { UriComponents } from '../../common/uri-components';
 import { DocumentsExtImpl } from '../documents';
+import { UriComponents } from '../../common/uri-components';
 
 class RawContentChangeEvent {
 
@@ -49,7 +49,7 @@ class RawContentChangeEvent {
 
 export class Cell {
 
-    static asModelAddData(notebook: theia.NotebookDocument, cell: NotebookCellDto): ModelAddedData & { notebook: theia.NotebookDocument } {
+    static asModelAddData(cell: NotebookCellDto): ModelAddedData {
         return {
             EOL: cell.eol,
             lines: cell.source,
@@ -57,8 +57,8 @@ export class Cell {
             uri: cell.uri,
             isDirty: false,
             versionId: 1,
-            notebook,
-            modeId: ''
+            modeId: cell.language,
+            encoding: 'utf8' // see https://github.com/microsoft/vscode/blob/118f9ecd71a8f101b71ae19e3bf44802aa173209/src/vs/workbench/api/common/extHostNotebookDocument.ts#L44
         };
     }
 
@@ -287,7 +287,8 @@ export class NotebookDocument implements Disposable {
             } else if (rawEvent.kind === notebookCommon.NotebookCellsChangeType.Output) {
                 this.setCellOutputs(rawEvent.index, rawEvent.outputs);
                 relaxedCellChanges.push({ cell: this.cells[rawEvent.index].apiCell, outputs: this.cells[rawEvent.index].apiCell.outputs });
-
+            } else if (rawEvent.kind === notebookCommon.NotebookCellsChangeType.ChangeDocumentMetadata) {
+                this.metadata = result.metadata ?? {};
                 // } else if (rawEvent.kind === notebookCommon.NotebookCellsChangeType.OutputItem) {
                 //     this._setCellOutputItems(rawEvent.index, rawEvent.outputId, rawEvent.append, rawEvent.outputItems);
                 //     relaxedCellChanges.push({ cell: this.cells[rawEvent.index].apiCell, outputs: this.cells[rawEvent.index].apiCell.outputs });
@@ -346,9 +347,10 @@ export class NotebookDocument implements Disposable {
             return;
         }
 
+        const addedDocuments: ModelAddedData[] = [];
+        const removedDocuments: UriComponents[] = [];
+
         const contentChangeEvents: RawContentChangeEvent[] = [];
-        const addedCellDocuments: ModelAddedData[] = [];
-        const removedCellDocuments: UriComponents[] = [];
 
         splices.reverse().forEach(splice => {
             const cellDtos = splice.newItems;
@@ -356,7 +358,7 @@ export class NotebookDocument implements Disposable {
 
                 const extCell = new Cell(this, this.editorsAndDocuments, cell);
                 if (!initialization) {
-                    addedCellDocuments.push(Cell.asModelAddData(this.apiNotebook, cell));
+                    addedDocuments.push(Cell.asModelAddData(cell));
                 }
                 return extCell;
             });
@@ -364,11 +366,18 @@ export class NotebookDocument implements Disposable {
             const changeEvent = new RawContentChangeEvent(splice.start, splice.deleteCount, [], newCells);
             const deletedItems = this.cells.splice(splice.start, splice.deleteCount, ...newCells);
             for (const cell of deletedItems) {
-                removedCellDocuments.push(cell.uri.toComponents());
                 changeEvent.deletedItems.push(cell.apiCell);
+                removedDocuments.push(cell.uri.toComponents());
             }
             contentChangeEvents.push(changeEvent);
         });
+
+        if (addedDocuments.length > 0 || removedDocuments.length > 0) {
+            this.editorsAndDocuments.acceptEditorsAndDocumentsDelta({
+                addedDocuments,
+                removedDocuments
+            });
+        }
 
         if (bucket) {
             for (const changeEvent of contentChangeEvents) {

@@ -26,7 +26,7 @@ import URI from '@theia/core/lib/common/uri';
 import { Emitter, Event, WaitUntilEvent } from '@theia/core/lib/common/event';
 import { EditorManager, EditorWidget } from '@theia/editor/lib/browser';
 import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
-import { LabelProvider, PreferenceScope, PreferenceService, QuickPickValue, StorageService } from '@theia/core/lib/browser';
+import { LabelProvider, QuickPickValue, StorageService } from '@theia/core/lib/browser';
 import { QuickPickService } from '@theia/core/lib/common/quick-pick-service';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
 import { DebugConfigurationModel } from './debug-configuration-model';
@@ -35,12 +35,11 @@ import { DebugService } from '../common/debug-service';
 import { ContextKey, ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { DebugConfiguration } from '../common/debug-common';
 import { WorkspaceVariableContribution } from '@theia/workspace/lib/browser/workspace-variable-contribution';
-import { PreferenceConfigurations } from '@theia/core/lib/browser/preferences/preference-configurations';
 import { MonacoTextModelService } from '@theia/monaco/lib/browser/monaco-text-model-service';
 import * as monaco from '@theia/monaco-editor-core';
 import { ICommandService } from '@theia/monaco-editor-core/esm/vs/platform/commands/common/commands';
 import { StandaloneServices } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices';
-import { nls } from '@theia/core';
+import { nls, PreferenceConfigurations, PreferenceScope, PreferenceService } from '@theia/core';
 import { DebugCompound } from '../common/debug-compound';
 
 export interface WillProvideDebugConfiguration extends WaitUntilEvent {
@@ -342,11 +341,11 @@ export class DebugConfigurationManager {
         if (!model) {
             return;
         }
-        const widget = await this.doOpen(model);
-        if (!(widget.editor instanceof MonacoEditor)) {
+        const editor = MonacoEditor.get(await this.doOpen(model))?.getControl();
+        const editorModel = editor && editor.getModel();
+        if (!editorModel) {
             return;
         }
-        const editor = widget.editor.getControl();
         const commandService = StandaloneServices.get(ICommandService);
         let position: monaco.Position | undefined;
         let depthInArray = 0;
@@ -357,7 +356,7 @@ export class DebugConfigurationManager {
             },
             onArrayBegin: offset => {
                 if (lastProperty === 'configurations' && depthInArray === 0) {
-                    position = editor.getModel()!.getPositionAt(offset + 1);
+                    position = editorModel!.getPositionAt(offset + 1);
                 }
                 depthInArray++;
             },
@@ -369,12 +368,12 @@ export class DebugConfigurationManager {
             return;
         }
         // Check if there are more characters on a line after a "configurations": [, if yes enter a newline
-        if (editor.getModel()!.getLineLastNonWhitespaceColumn(position.lineNumber) > position.column) {
+        if (editorModel.getLineLastNonWhitespaceColumn(position.lineNumber) > position.column) {
             editor.setPosition(position);
             editor.trigger('debug', 'lineBreakInsert', undefined);
         }
         // Check if there is already an empty line to insert suggest, if yes just place the cursor
-        if (editor.getModel()!.getLineLastNonWhitespaceColumn(position.lineNumber + 1) === 0) {
+        if (editorModel!.getLineLastNonWhitespaceColumn(position.lineNumber + 1) === 0) {
             editor.setPosition({ lineNumber: position.lineNumber + 1, column: 1 << 30 });
             await commandService.executeCommand('editor.action.deleteLines');
         }
@@ -511,8 +510,8 @@ export class DebugConfigurationManager {
 
     protected getInitialConfigurationContent(initialConfigurations: DebugConfiguration[]): string {
         return `{
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
+  // ${nls.localizeByDefault('Use IntelliSense to learn about possible attributes.')}
+  // ${nls.localizeByDefault('Hover to view descriptions of existing attributes.')}
   "version": "0.2.0",
   "configurations": ${JSON.stringify(initialConfigurations, undefined, '  ').split('\n').map(line => '  ' + line).join('\n').trim()}
 }
@@ -530,7 +529,7 @@ export class DebugConfigurationManager {
             return undefined;
         }
         const items: Array<QuickPickValue<string>> = debuggers.map(({ label, type }) => ({ label, value: type }));
-        const selectedItem = await this.quickPickService.show(items, { placeholder: 'Select Environment' });
+        const selectedItem = await this.quickPickService.show(items, { placeholder: nls.localizeByDefault('Select debugger') });
         return selectedItem?.value;
     }
 

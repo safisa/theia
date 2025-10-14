@@ -16,7 +16,7 @@
 
 import { inject, injectable, named } from 'inversify';
 import { Event, Emitter } from '../../common';
-import { CorePreferences } from '../core-preferences';
+import { CorePreferences } from '../../common/core-preferences';
 import { ContributionProvider } from '../../common/contribution-provider';
 import { FrontendApplicationContribution, OnWillStopAction } from '../frontend-application-contribution';
 import { WindowService } from './window-service';
@@ -55,6 +55,10 @@ export class DefaultWindowService implements WindowService, FrontendApplicationC
 
     openNewDefaultWindow(): void {
         this.openNewWindow(`#${DEFAULT_WINDOW_HASH}`);
+    }
+
+    focus(): void {
+        window.focus();
     }
 
     /**

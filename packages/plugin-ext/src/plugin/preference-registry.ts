@@ -16,6 +16,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { Emitter, Event } from '@theia/core/lib/common/event';
 import { isOSX, isWindows } from '@theia/core/lib/common/os';
 import { URI } from '@theia/core/shared/vscode-uri';
@@ -24,7 +25,7 @@ import { IConfigurationOverrides } from '@theia/monaco-editor-core/esm/vs/platfo
 import { Configuration, ConfigurationModel, ConfigurationModelParser } from '@theia/monaco-editor-core/esm/vs/platform/configuration/common/configurationModels';
 import { Workspace, WorkspaceFolder } from '@theia/monaco-editor-core/esm/vs/platform/workspace/common/workspace';
 import * as theia from '@theia/plugin';
-import { v4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 import {
     PLUGIN_RPC_CONTEXT, PreferenceChangeExt, PreferenceData, PreferenceRegistryExt,
     PreferenceRegistryMain
@@ -33,6 +34,7 @@ import { RPCProtocol } from '../common/rpc-protocol';
 import { isObject, mixin } from '../common/types';
 import { WorkspaceExtImpl } from './workspace';
 import cloneDeep = require('lodash.clonedeep');
+import { ILogService, LogLevel } from '@theia/monaco-editor-core/esm/vs/platform/log/common/log';
 
 const injectionRe = /\b__proto__\b|\bconstructor\.prototype\b/;
 
@@ -74,22 +76,51 @@ function lookUp(tree: any, key: string): any {
 export class TheiaWorkspace extends Workspace {
     constructor(ext: WorkspaceExtImpl) {
         const folders = (ext.workspaceFolders ?? []).map(folder => new WorkspaceFolder(folder));
-        super(v4(), folders, false, ext.workspaceFile ?? null, () => isOSX || isWindows);
+        super(generateUuid(), folders, false, ext.workspaceFile ?? null, () => isOSX || isWindows);
     }
 }
 
+const logService: ILogService = {
+    _serviceBrand: undefined,
+    onDidChangeLogLevel: new Emitter<LogLevel>().event,
+    getLevel: function (): LogLevel {
+        return LogLevel.Info;
+    },
+    setLevel: function (level: LogLevel): void {
+    },
+    trace: function (message: string, ...args: any[]): void {
+    },
+    debug: function (message: string, ...args: any[]): void {
+    },
+    info: function (message: string, ...args: any[]): void {
+    },
+    warn: function (message: string, ...args: any[]): void {
+    },
+    error: function (message: string | Error, ...args: any[]): void {
+    },
+    flush: function (): void {
+    },
+    dispose: function (): void {
+    }
+};
+
+@injectable()
 export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
+    @inject(RPCProtocol)
+    protected rpc: RPCProtocol;
+
+    @inject(WorkspaceExtImpl)
+    protected readonly workspace: WorkspaceExtImpl;
+
     private proxy: PreferenceRegistryMain;
     private _preferences: Configuration;
     private readonly _onDidChangeConfiguration = new Emitter<theia.ConfigurationChangeEvent>();
 
     readonly onDidChangeConfiguration: Event<theia.ConfigurationChangeEvent> = this._onDidChangeConfiguration.event;
 
-    constructor(
-        rpc: RPCProtocol,
-        private readonly workspace: WorkspaceExtImpl
-    ) {
-        this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.PREFERENCE_REGISTRY_MAIN);
+    @postConstruct()
+    initialize(): void {
+        this.proxy = this.rpc.getProxy(PLUGIN_RPC_CONTEXT.PREFERENCE_REGISTRY_MAIN);
     }
 
     init(data: PreferenceData): void {
@@ -192,10 +223,10 @@ export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
                 }
 
                 const configInspect: ConfigurationInspect<T> = { key };
-                configInspect.defaultValue = result.default?.value;
-                configInspect.globalValue = result.user?.value;
-                configInspect.workspaceValue = result.workspace?.value;
-                configInspect.workspaceFolderValue = result.workspaceFolder?.value;
+                configInspect.defaultValue = cloneDeep(result.default?.value);
+                configInspect.globalValue = cloneDeep(result.user?.value);
+                configInspect.workspaceValue = cloneDeep(result.workspace?.value);
+                configInspect.workspaceFolderValue = cloneDeep(result.workspaceFolder?.value);
                 return configInspect;
             }
         };
@@ -245,19 +276,27 @@ export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
         Object.keys(data[PreferenceScope.Folder]).forEach(resource => {
             folderConfigurations.set(URI.parse(resource), this.getConfigurationModel(`Folder: ${resource}`, data[PreferenceScope.Folder][resource]));
         });
+
+        function createEmptyModel(): ConfigurationModel {
+            return new ConfigurationModel({}, [], [], undefined, logService);
+        }
+
         return new Configuration(
             defaultConfiguration,
-            new ConfigurationModel(), /** policy configuration. */
-            new ConfigurationModel(), /** application configuration. */
+            createEmptyModel(), /** policy configuration. */
+            createEmptyModel(), /** application configuration. */
             userConfiguration,
-            new ConfigurationModel(), /** remote configuration. */
+            createEmptyModel(), /** remote configuration. */
             workspaceConfiguration,
-            folderConfigurations
+            folderConfigurations,
+            ConfigurationModel.createEmptyModel(logService),
+            new ResourceMap<ConfigurationModel>(),
+            logService
         );
     }
 
     private getConfigurationModel(label: string, data: { [key: string]: any }): ConfigurationModel {
-        const parser = new ConfigurationModelParser(label);
+        const parser = new ConfigurationModelParser(label, logService);
         const sanitized = this.sanitize(data);
         parser.parseRaw(sanitized);
         return parser.configurationModel;

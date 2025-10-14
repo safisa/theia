@@ -15,7 +15,7 @@
 // *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
-import { Widget } from '@theia/core/shared/@phosphor/widgets';
+import { Widget } from '@theia/core/shared/@lumino/widgets';
 import { FrontendApplicationContribution, WidgetOpenerOptions, NavigatableWidgetOpenHandler, codicon } from '@theia/core/lib/browser';
 import { EditorManager, TextEditor, EditorWidget, EditorContextMenu } from '@theia/editor/lib/browser';
 import { DisposableCollection, CommandContribution, CommandRegistry, Command, MenuContribution, MenuModelRegistry, Disposable } from '@theia/core/lib/common';
@@ -26,7 +26,7 @@ import { Position } from '@theia/core/shared/vscode-languageserver-protocol';
 import { PreviewWidget } from './preview-widget';
 import { PreviewHandlerProvider } from './preview-handler';
 import { PreviewUri } from './preview-uri';
-import { PreviewPreferences } from './preview-preferences';
+import { PreviewPreferences } from '../common/preview-preferences';
 import { nls } from '@theia/core/lib/common/nls';
 
 import debounce = require('@theia/core/shared/lodash.debounce');
@@ -163,7 +163,10 @@ export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWid
         const disposable = ref.onDidDoubleClick(async location => {
             const { editor } = await this.openSource(ref);
             editor.revealPosition(location.range.start);
-            editor.selection = location.range;
+            editor.selection = {
+                ...location.range,
+                direction: 'ltr'
+            };
             ref.revealForSourceLine(location.range.start.line);
         });
         ref.disposed.connect(() => disposable.dispose());

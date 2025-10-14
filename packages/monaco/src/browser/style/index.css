@@ -13,7 +13,7 @@
 /*
  * set z-index to 0, so tabs are not above overlay widgets
  */
-.p-TabBar.theia-app-centers {
+.lm-TabBar.theia-app-centers {
   z-index: 0;
   display: flex;
 }
@@ -21,7 +21,6 @@
 .monaco-editor .zone-widget {
   position: absolute;
   z-index: 10;
-  background-color: var(--theia-editorWidget-background);
 }
 
 .monaco-editor .zone-widget .zone-widget-container {
@@ -177,6 +176,10 @@
   text-align: left;
 }
 
+.quick-input-list .monaco-icon-label::before {
+  height: 22px;
+}
+
 .codicon-file.default-file-icon.file-icon {
   padding-left: 2px;
   height: 22px;
@@ -260,4 +263,34 @@
 .monaco-inputbox.warning > .ibwrapper > .input,
 .monaco-inputbox.info > .ibwrapper > .input {
     outline: 0 !important;
+}
+
+.monaco-inputbox > .ibwrapper > .input {
+  min-height: 28px;
+  border-radius: 2px;
+}
+
+.quick-input-header > .quick-input-inline-action-bar {
+  display: none;
+}
+
+.monaco-editor .overlay-button {
+  padding: 6px 11px;
+  border-radius: 2px;
+  cursor: pointer;
+  user-select: none;
+  z-index: 1;
+  background-color: var(--theia-button-background);
+  color: var(--theia-button-foreground);
+  border: 1px solid var(--theia-contrast-border);
+  font-family: var(--theia-ui-font-family);
+  line-height: 1.4;
+}
+
+.monaco-editor .overlay-button.theia-mod-disabled {
+  display: none;
+}
+
+.monaco-diff-editor .gutter .action-item .action-label {
+  color: var(--theia-editorGutter-itemGlyphForeground);
 }

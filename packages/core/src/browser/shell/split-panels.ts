@@ -15,7 +15,7 @@
 // *****************************************************************************
 
 import { injectable } from 'inversify';
-import { SplitPanel, SplitLayout, Widget } from '@phosphor/widgets';
+import { SplitPanel, SplitLayout, Widget } from '@lumino/widgets';
 
 export interface SplitPositionOptions {
     /** The side of the side panel that shall be resized. */
@@ -91,13 +91,14 @@ export class SplitPositionHandler {
             move.resolve = resolve;
             move.reject = reject;
             if (this.splitMoves.length === 0) {
-                window.requestAnimationFrame(this.animationFrame.bind(this));
+                setTimeout(this.animationFrame.bind(this), 10);
             }
             this.splitMoves.push(move);
         });
     }
 
-    protected animationFrame(time: number): void {
+    protected animationFrame(): void {
+        const time = Date.now();
         const move = this.splitMoves[this.currentMoveIndex];
         let rejectedOrResolved = false;
         if (move.ended || move.referenceWidget && move.referenceWidget.isHidden) {
@@ -133,7 +134,7 @@ export class SplitPositionHandler {
             this.currentMoveIndex = 0;
         }
         if (this.splitMoves.length > 0) {
-            window.requestAnimationFrame(this.animationFrame.bind(this));
+            setTimeout(this.animationFrame.bind(this));
         }
     }
 

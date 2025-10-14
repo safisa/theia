@@ -20,19 +20,21 @@ import {
     CommandContribution,
     CommandRegistry,
     DisposableCollection,
+    Event,
     MenuAction,
     MenuContribution,
     MenuModelRegistry,
+    MessageService,
     Mutable
 } from '@theia/core';
-import { codicon, DiffUris, Widget } from '@theia/core/lib/browser';
+import { codicon, DiffUris, Widget, open, OpenerService } from '@theia/core/lib/browser';
 import {
+    TabBarToolbarAction,
     TabBarToolbarContribution,
-    TabBarToolbarItem,
     TabBarToolbarRegistry
 } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
-import { EditorContextMenu, EditorManager, EditorOpenerOptions, EditorWidget } from '@theia/editor/lib/browser';
-import { Git, GitFileChange, GitFileStatus } from '../common';
+import { EDITOR_CONTENT_MENU, EditorContextMenu, EditorManager, EditorOpenerOptions, EditorWidget } from '@theia/editor/lib/browser';
+import { Git, GitFileChange, GitFileStatus, GitWatcher, Repository } from '../common';
 import { GitRepositoryTracker } from './git-repository-tracker';
 import { GitAction, GitQuickOpenService } from './git-quick-open-service';
 import { GitSyncService } from './git-sync-service';
@@ -42,8 +44,10 @@ import { GitErrorHandler } from '../browser/git-error-handler';
 import { ScmWidget } from '@theia/scm/lib/browser/scm-widget';
 import { ScmTreeWidget } from '@theia/scm/lib/browser/scm-tree-widget';
 import { ScmCommand, ScmResource } from '@theia/scm/lib/browser/scm-provider';
+import { LineRange } from '@theia/scm/lib/browser/dirty-diff/diff-computer';
+import { DirtyDiffWidget, SCM_CHANGE_TITLE_MENU } from '@theia/scm/lib/browser/dirty-diff/dirty-diff-widget';
 import { ProgressService } from '@theia/core/lib/common/progress-service';
-import { GitPreferences } from './git-preferences';
+import { GitPreferences } from '../common/git-preferences';
 import { ColorContribution } from '@theia/core/lib/browser/color-application-contribution';
 import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
 import { ScmInputIssueType } from '@theia/scm/lib/browser/scm-input';
@@ -144,6 +148,21 @@ export namespace GIT_COMMANDS {
         label: 'Open Changes',
         iconClass: codicon('git-compare')
     }, 'vscode.git/package/command.openChange', GIT_CATEGORY_KEY);
+    export const OPEN_MERGE_EDITOR = Command.toLocalizedCommand({
+        id: 'git.open.mergeEditor',
+        category: GIT_CATEGORY,
+        label: 'Resolve in Merge Editor'
+    }, 'vscode.git/package/command.git.openMergeEditor', GIT_CATEGORY_KEY);
+    export const OPEN_MERGE_CHANGES = Command.toLocalizedCommand({
+        id: 'git.open.mergeChanges',
+        category: GIT_CATEGORY,
+        label: 'Resolve in Merge Editor'
+    }, 'vscode.git/package/command.git.openMergeEditor', GIT_CATEGORY_KEY);
+    export const ACCEPT_MERGE = Command.toLocalizedCommand({
+        id: 'git.acceptMerge',
+        category: GIT_CATEGORY,
+        label: 'Complete Merge'
+    }, 'vscode.git/package/command.git.acceptMerge', GIT_CATEGORY_KEY);
     export const SYNC = Command.toLocalizedCommand({
         id: 'git.sync',
         category: GIT_CATEGORY,
@@ -166,6 +185,18 @@ export namespace GIT_COMMANDS {
         label: 'Stage All Changes',
         iconClass: codicon('add')
     }, 'vscode.git/package/command.stageAll', GIT_CATEGORY_KEY);
+    export const STAGE_CHANGE = Command.toLocalizedCommand({
+        id: 'git.stage.change',
+        category: GIT_CATEGORY,
+        label: 'Stage Change',
+        iconClass: codicon('add')
+    }, 'vscode.git/package/command.stageChange', GIT_CATEGORY_KEY);
+    export const REVERT_CHANGE = Command.toLocalizedCommand({
+        id: 'git.revert.change',
+        category: GIT_CATEGORY,
+        label: 'Revert Change',
+        iconClass: codicon('discard')
+    }, 'vscode.git/package/command.revertChange', GIT_CATEGORY_KEY);
     export const UNSTAGE = Command.toLocalizedCommand({
         id: 'git.unstage',
         category: GIT_CATEGORY,
@@ -267,6 +298,8 @@ export class GitContribution implements CommandContribution, MenuContribution, T
 
     protected toDispose = new DisposableCollection();
 
+    @inject(OpenerService) protected openerService: OpenerService;
+    @inject(MessageService) protected messageService: MessageService;
     @inject(EditorManager) protected readonly editorManager: EditorManager;
     @inject(GitQuickOpenService) protected readonly quickOpenService: GitQuickOpenService;
     @inject(GitRepositoryTracker) protected readonly repositoryTracker: GitRepositoryTracker;
@@ -280,6 +313,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
     @inject(GitPreferences) protected readonly gitPreferences: GitPreferences;
     @inject(DecorationsService) protected readonly decorationsService: DecorationsService;
     @inject(GitDecorationProvider) protected readonly gitDecorationProvider: GitDecorationProvider;
+    @inject(GitWatcher) protected readonly gitWatcher: GitWatcher;
 
     onStart(): void {
         this.updateStatusBar();
@@ -294,6 +328,18 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         });
         menus.registerMenuAction(EditorContextMenu.NAVIGATION, {
             commandId: GIT_COMMANDS.OPEN_CHANGES.id
+        });
+        menus.registerMenuAction(EDITOR_CONTENT_MENU, {
+            commandId: GIT_COMMANDS.OPEN_MERGE_EDITOR.id,
+            when: 'scmProvider == git && !isInDiffEditor && !isMergeEditor'
+        });
+        menus.registerMenuAction([...ScmTreeWidget.RESOURCE_CONTEXT_MENU, 'navigation'], {
+            commandId: GIT_COMMANDS.OPEN_MERGE_CHANGES.id,
+            when: 'scmProvider == git && scmResourceGroup == merge'
+        });
+        menus.registerMenuAction(EDITOR_CONTENT_MENU, {
+            commandId: GIT_COMMANDS.ACCEPT_MERGE.id,
+            when: 'scmProvider == git && isMergeResultEditor'
         });
 
         const registerResourceAction = (group: string, action: MenuAction) => {
@@ -384,6 +430,15 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         registerResourceGroupAction('1_modification', {
             commandId: GIT_COMMANDS.DISCARD_ALL.id,
             when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges',
+        });
+
+        menus.registerMenuAction(SCM_CHANGE_TITLE_MENU, {
+            commandId: GIT_COMMANDS.STAGE_CHANGE.id,
+            when: 'scmProvider == git'
+        });
+        menus.registerMenuAction(SCM_CHANGE_TITLE_MENU, {
+            commandId: GIT_COMMANDS.REVERT_CHANGE.id,
+            when: 'scmProvider == git'
         });
     }
 
@@ -482,6 +537,64 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             isEnabled: widget => !!this.getOpenChangesOptions(widget),
             isVisible: widget => !!this.getOpenChangesOptions(widget)
         });
+        registry.registerCommand(GIT_COMMANDS.OPEN_MERGE_EDITOR, {
+            execute: widget => {
+                if (widget instanceof EditorWidget) {
+                    const scmProvider = this.repositoryProvider.selectedScmProvider;
+                    if (scmProvider) {
+                        const uri = widget.editor.uri.toString();
+                        if (scmProvider.mergeChanges.some(c => c.uri === uri)) {
+                            scmProvider.openMergeEditor(widget.editor.uri).then(() => widget.close()).catch(e => {
+                                console.error(e);
+                                this.messageService.error(e.message);
+                            });
+                        }
+                    }
+                }
+            },
+            isEnabled: widget => {
+                if (widget instanceof EditorWidget) {
+                    const scmProvider = this.repositoryProvider.selectedScmProvider;
+                    if (scmProvider) {
+                        const uri = widget.editor.uri.toString();
+                        if (scmProvider.mergeChanges.some(c => c.uri === uri)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            },
+            onDidChangeEnabled: this.repositoryTracker.onGitEvent as Event<void>
+        });
+        registry.registerCommand(GIT_COMMANDS.ACCEPT_MERGE, {
+            execute: async widget => {
+                if (widget instanceof EditorWidget) {
+                    const scmProvider = this.repositoryProvider.selectedScmProvider;
+                    if (scmProvider) {
+                        const uri = widget.editor.uri.toString();
+                        if (scmProvider.mergeChanges.some(c => c.uri === uri)) {
+                            const result = await this.commands.executeCommand('mergeEditor.acceptMerge') as { successful: boolean };
+                            if (result.successful) {
+                                await this.withProgress(() => scmProvider.stage(uri));
+                            }
+                        }
+                    }
+                }
+            },
+            isEnabled: widget => {
+                if (widget instanceof EditorWidget) {
+                    const scmProvider = this.repositoryProvider.selectedScmProvider;
+                    if (scmProvider) {
+                        const uri = widget.editor.uri.toString();
+                        if (scmProvider.mergeChanges.some(c => c.uri === uri)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            },
+            onDidChangeEnabled: this.repositoryTracker.onGitEvent as Event<void>
+        });
         registry.registerCommand(GIT_COMMANDS.SYNC, {
             execute: () => this.withProgress(() => this.syncService.sync()),
             isEnabled: () => this.syncService.canSync(),
@@ -538,8 +651,42 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         registry.registerCommand(GIT_COMMANDS.OPEN_CHANGED_FILE, {
             execute: (...arg: ScmResource[]) => {
                 for (const resource of arg) {
-                    this.editorManager.open(resource.sourceUri, { mode: 'reveal' });
+                    open(this.openerService, resource.sourceUri, { mode: 'reveal' }).catch(e => {
+                        this.messageService.error(e.message);
+                    });
                 }
+            }
+        });
+        registry.registerCommand(GIT_COMMANDS.OPEN_MERGE_CHANGES, {
+            execute: (...arg: ScmResource[]) => {
+                const scmProvider = this.repositoryProvider.selectedScmProvider;
+                if (scmProvider) {
+                    for (const resource of arg) {
+                        if (resource.sourceUri) {
+                            const uri = resource.sourceUri.toString();
+                            if (scmProvider.mergeChanges.some(c => c.uri === uri)) {
+                                scmProvider.openMergeEditor(resource.sourceUri).catch(e => {
+                                    console.error(e);
+                                    this.messageService.error(e.message);
+                                });
+                            }
+                        }
+                    }
+                }
+            },
+            isEnabled: (...arg: ScmResource[]) => {
+                const scmProvider = this.repositoryProvider.selectedScmProvider;
+                if (scmProvider) {
+                    for (const resource of arg) {
+                        if (resource.sourceUri) {
+                            const uri = resource.sourceUri.toString();
+                            if (scmProvider.mergeChanges.some(c => c.uri === uri)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
             }
         });
         registry.registerCommand(GIT_COMMANDS.STASH, {
@@ -572,6 +719,14 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             execute: () => this.quickOpenService.initRepository(),
             isEnabled: widget => this.workspaceService.opened && (!widget || widget instanceof ScmWidget) && !this.repositoryProvider.selectedRepository,
             isVisible: widget => this.workspaceService.opened && (!widget || widget instanceof ScmWidget) && !this.repositoryProvider.selectedRepository
+        });
+        registry.registerCommand(GIT_COMMANDS.STAGE_CHANGE, {
+            execute: (widget: DirtyDiffWidget) => this.withProgress(() => this.stageChange(widget)),
+            isEnabled: widget => widget instanceof DirtyDiffWidget
+        });
+        registry.registerCommand(GIT_COMMANDS.REVERT_CHANGE, {
+            execute: (widget: DirtyDiffWidget) => this.withProgress(() => this.revertChange(widget)),
+            isEnabled: widget => widget instanceof DirtyDiffWidget
         });
     }
     async amend(): Promise<void> {
@@ -622,7 +777,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             tooltip: GIT_COMMANDS.INIT_REPOSITORY.label
         });
 
-        const registerItem = (item: Mutable<TabBarToolbarItem>) => {
+        const registerItem = (item: Mutable<TabBarToolbarAction & { command: string }>) => {
             const commandId = item.command;
             const id = '__git.tabbar.toolbar.' + commandId;
             const command = this.commands.getCommand(commandId);
@@ -920,6 +1075,62 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             };
         }
 
+    }
+
+    async stageChange(widget: DirtyDiffWidget): Promise<void> {
+        const scmRepository = this.repositoryProvider.selectedScmRepository;
+        if (!scmRepository) {
+            return;
+        }
+
+        const repository = scmRepository.provider.repository;
+
+        const path = Repository.relativePath(repository, widget.uri)?.toString();
+        if (!path) {
+            return;
+        }
+
+        const { currentChange } = widget;
+        if (!currentChange) {
+            return;
+        }
+
+        const dataToStage = await widget.getContentWithSelectedChanges(change => change === currentChange);
+
+        try {
+            const hash = (await this.git.exec(repository, ['hash-object', '--stdin', '-w', '--path', path], { stdin: dataToStage, stdinEncoding: 'utf8' })).stdout.trim();
+
+            let mode = (await this.git.exec(repository, ['ls-files', '--format=%(objectmode)', '--', path])).stdout.split('\n').filter(line => !!line.trim())[0];
+            if (!mode) {
+                mode = '100644'; // regular non-executable file
+            }
+
+            await this.git.exec(repository, ['update-index', '--add', '--cacheinfo', mode, hash, path]);
+
+            // enforce a notification as there would be no status update if the file had been staged already
+            this.gitWatcher.onGitChanged({ source: repository, status: await this.git.status(repository) });
+        } catch (error) {
+            this.gitErrorHandler.handleError(error);
+        }
+
+        widget.editor.cursor = LineRange.getStartPosition(currentChange.currentRange);
+    }
+
+    async revertChange(widget: DirtyDiffWidget): Promise<void> {
+        const { currentChange } = widget;
+        if (!currentChange) {
+            return;
+        }
+
+        const editor = widget.editor.getControl();
+        editor.pushUndoStop();
+        editor.executeEdits('Revert Change', [{
+            range: editor.getModel()!.getFullModelRange(),
+            text: await widget.getContentWithSelectedChanges(change => change !== currentChange)
+        }]);
+        editor.pushUndoStop();
+
+        widget.editor.cursor = LineRange.getStartPosition(currentChange.currentRange);
     }
 
     /**

@@ -34,6 +34,8 @@ export interface SelectOption {
 }
 
 export interface SelectComponentProps {
+    id?: string
+    className?: string
     options: readonly SelectOption[]
     defaultValue?: string | number
     onChange?: (option: SelectOption, index: number) => void,
@@ -61,12 +63,7 @@ export class SelectComponent extends React.Component<SelectComponentProps, Selec
 
     constructor(props: SelectComponentProps) {
         super(props);
-        let selected = 0;
-        if (typeof props.defaultValue === 'number') {
-            selected = props.defaultValue;
-        } else if (typeof props.defaultValue === 'string') {
-            selected = Math.max(props.options.findIndex(e => e.value === props.defaultValue), 0);
-        }
+        const selected = this.getInitialSelectedIndex(props);
         this.state = {
             selected,
             original: selected,
@@ -81,6 +78,27 @@ export class SelectComponent extends React.Component<SelectComponentProps, Selec
             document.body.appendChild(list);
         }
         this.dropdownElement = list;
+    }
+
+    protected getInitialSelectedIndex(props: SelectComponentProps): number {
+        let selected = 0;
+        if (typeof props.defaultValue === 'number') {
+            selected = props.defaultValue;
+        } else if (typeof props.defaultValue === 'string') {
+            selected = Math.max(props.options.findIndex(e => e.value === props.defaultValue), 0);
+        }
+        return selected;
+    }
+
+    override componentDidUpdate(prevProps: SelectComponentProps): void {
+        if (prevProps.defaultValue !== this.props.defaultValue || prevProps.options !== this.props.options) {
+            const selected = this.getInitialSelectedIndex(this.props);
+            this.setState({
+                selected,
+                original: selected,
+                hover: selected
+            });
+        }
     }
 
     get options(): readonly SelectOption[] {
@@ -177,10 +195,11 @@ export class SelectComponent extends React.Component<SelectComponentProps, Selec
         const selectedItemLabel = options[selected]?.label ?? options[selected]?.value;
         return <>
             <div
+                id={this.props.id}
                 key="select-component"
                 ref={this.fieldRef}
                 tabIndex={0}
-                className="theia-select-component"
+                className={`theia-select-component${this.props.className ? ` ${this.props.className}` : ''}`}
                 onClick={e => this.handleClickEvent(e)}
                 onBlur={
                     () => {
@@ -325,7 +344,7 @@ export class SelectComponent extends React.Component<SelectComponentProps, Selec
 
         return <div key="dropdown" className="theia-select-component-dropdown" style={{
             top: invert ? 'none' : this.state.dimensions.bottom,
-            bottom: invert ? shellArea.top + shellArea.height - this.state.dimensions.top : 'none',
+            bottom: invert ? shellArea.top - this.state.dimensions.top : 'none',
             left: this.alignLeft ? this.state.dimensions.left : 'none',
             right: this.alignLeft ? 'none' : shellArea.width - this.state.dimensions.right,
             width: Math.min(Math.max(this.state.dimensions.width, this.optimalWidth), maxWidth),

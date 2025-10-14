@@ -14,10 +14,14 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 import '@theia/core/shared/reflect-metadata';
-import { ConnectionClosedError, RPCProtocolImpl } from '../../common/rpc-protocol';
+import { Container } from '@theia/core/shared/inversify';
+import { URI as VSCodeURI } from '@theia/core/shared/vscode-uri';
+import { MsgPackExtensionManager } from '@theia/core/lib/common/message-rpc/msg-pack-extension-manager';
+import { ConnectionClosedError, MsgPackExtensionTag, RPCProtocol } from '../../common/rpc-protocol';
 import { ProcessTerminatedMessage, ProcessTerminateMessage } from './hosted-plugin-protocol';
 import { PluginHostRPC } from './plugin-host-rpc';
-import { IPCChannel } from '@theia/core/lib/node';
+import pluginHostModule from './plugin-host-module';
+import { URI } from '../../plugin/types-impl';
 
 console.log('PLUGIN_HOST(' + process.pid + ') starting instance');
 
@@ -73,9 +77,22 @@ process.on('rejectionHandled', (promise: Promise<any>) => {
     }
 });
 
+// Our own vscode.Uri class with a custom reviver had been introduced in #9422;
+// the custom reviver was then removed in #11261 without any replacement, which
+// caused `uri instanceof vscode.Uri` checks to no longer succeed for deserialized URIs
+// in plugins. This code reestablishes the custom deserialization for URIs.
+const vsCodeUriMsgPackExtension = MsgPackExtensionManager.getInstance().getExtension(MsgPackExtensionTag.VsCodeUri);
+if (vsCodeUriMsgPackExtension?.class === VSCodeURI) { // double-check the extension class
+    vsCodeUriMsgPackExtension.deserialize = data => URI.parse(data); // create an instance of our local plugin API URI class
+}
+
 let terminating = false;
-const channel = new IPCChannel();
-const rpc = new RPCProtocolImpl(channel);
+
+const container = new Container();
+container.load(pluginHostModule);
+
+const rpc: RPCProtocol = container.get(RPCProtocol);
+const pluginHostRPC = container.get(PluginHostRPC);
 
 process.on('message', async (message: string) => {
     if (terminating) {
@@ -103,6 +120,3 @@ process.on('message', async (message: string) => {
         console.error(e);
     }
 });
-
-const pluginHostRPC = new PluginHostRPC(rpc);
-pluginHostRPC.initialize();

@@ -14,8 +14,8 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { ConfirmDialog, Dialog, PreferenceChange, StorageService } from '@theia/core/lib/browser';
-import { PreferenceService } from '@theia/core/lib/browser/preferences/preference-service';
+import { ConfirmDialog, Dialog, StorageService } from '@theia/core/lib/browser';
+import { PreferenceChange, PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { MessageService } from '@theia/core/lib/common/message-service';
 import { nls } from '@theia/core/lib/common/nls';
 import { Deferred } from '@theia/core/lib/common/promise-util';
@@ -23,9 +23,10 @@ import { inject, injectable, postConstruct } from '@theia/core/shared/inversify'
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
 import {
     WorkspaceTrustPreferences, WORKSPACE_TRUST_EMPTY_WINDOW, WORKSPACE_TRUST_ENABLED, WORKSPACE_TRUST_STARTUP_PROMPT, WorkspaceTrustPrompt
-} from './workspace-trust-preferences';
+} from '../common/workspace-trust-preferences';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { WorkspaceService } from './workspace-service';
+import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 
 const STORAGE_TRUSTED = 'trusted';
 
@@ -49,6 +50,9 @@ export class WorkspaceTrustService {
     @inject(WindowService)
     protected readonly windowService: WindowService;
 
+    @inject(ContextKeyService)
+    protected readonly contextKeyService: ContextKeyService;
+
     protected workspaceTrust = new Deferred<boolean>();
 
     @postConstruct()
@@ -71,6 +75,7 @@ export class WorkspaceTrustService {
             const trust = givenTrust ?? await this.calculateWorkspaceTrust();
             if (trust !== undefined) {
                 await this.storeWorkspaceTrust(trust);
+                this.contextKeyService.setContext('isWorkspaceTrusted', trust);
                 this.workspaceTrust.resolve(trust);
             }
         }
@@ -110,17 +115,19 @@ export class WorkspaceTrustService {
     }
 
     protected async handlePreferenceChange(change: PreferenceChange): Promise<void> {
-        if (change.preferenceName === WORKSPACE_TRUST_STARTUP_PROMPT && change.newValue !== WorkspaceTrustPrompt.ONCE) {
-            this.storage.setData(STORAGE_TRUSTED, undefined);
-        }
+        if (change.scope === PreferenceScope.User) {
+            if (change.preferenceName === WORKSPACE_TRUST_STARTUP_PROMPT && change.newValue !== WorkspaceTrustPrompt.ONCE) {
+                this.storage.setData(STORAGE_TRUSTED, undefined);
+            }
 
-        if (change.preferenceName === WORKSPACE_TRUST_ENABLED && this.isWorkspaceTrustResolved() && await this.confirmRestart()) {
-            this.windowService.setSafeToShutDown();
-            this.windowService.reload();
-        }
+            if (change.preferenceName === WORKSPACE_TRUST_ENABLED && this.isWorkspaceTrustResolved() && await this.confirmRestart()) {
+                this.windowService.setSafeToShutDown();
+                this.windowService.reload();
+            }
 
-        if (change.preferenceName === WORKSPACE_TRUST_ENABLED || change.preferenceName === WORKSPACE_TRUST_EMPTY_WINDOW) {
-            this.resolveWorkspaceTrust();
+            if (change.preferenceName === WORKSPACE_TRUST_ENABLED || change.preferenceName === WORKSPACE_TRUST_EMPTY_WINDOW) {
+                this.resolveWorkspaceTrust();
+            }
         }
     }
 

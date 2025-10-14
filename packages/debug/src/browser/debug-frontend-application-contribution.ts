@@ -17,13 +17,15 @@
 import {
     AbstractViewContribution, KeybindingRegistry, Widget, CompositeTreeNode, LabelProvider, codicon, OnWillStopAction, FrontendApplicationContribution, ConfirmDialog, Dialog
 } from '@theia/core/lib/browser';
+import { TreeElementNode } from '@theia/core/lib/browser/source-tree';
 import { injectable, inject } from '@theia/core/shared/inversify';
 import * as monaco from '@theia/monaco-editor-core';
-import { MenuModelRegistry, CommandRegistry, MAIN_MENU_BAR, Command, Emitter, Mutable, CompoundMenuNodeRole } from '@theia/core/lib/common';
-import { EDITOR_LINENUMBER_CONTEXT_MENU, EditorManager } from '@theia/editor/lib/browser';
+import { MenuModelRegistry, CommandRegistry, MAIN_MENU_BAR, Command, Emitter, Mutable, URI, Event, MessageService, CancellationError } from '@theia/core/lib/common';
+import { waitForEvent } from '@theia/core/lib/common/promise-util';
+import { EDITOR_CONTEXT_MENU, EDITOR_LINENUMBER_CONTEXT_MENU, EditorManager } from '@theia/editor/lib/browser';
 import { DebugSessionManager } from './debug-session-manager';
 import { DebugWidget } from './view/debug-widget';
-import { FunctionBreakpoint } from './breakpoint/breakpoint-marker';
+import { FunctionBreakpoint, SourceBreakpoint } from './breakpoint/breakpoint-marker';
 import { BreakpointManager } from './breakpoint/breakpoint-manager';
 import { DebugConfigurationManager } from './debug-configuration-manager';
 import { DebugState, DebugSession } from './debug-session';
@@ -41,8 +43,8 @@ import { DebugEditorService } from './editor/debug-editor-service';
 import { DebugConsoleContribution } from './console/debug-console-contribution';
 import { DebugService } from '../common/debug-service';
 import { DebugSchemaUpdater } from './debug-schema-updater';
-import { DebugPreferences } from './debug-preferences';
-import { TabBarToolbarContribution, TabBarToolbarRegistry, TabBarToolbarItem } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
+import { DebugPreferences } from '../common/debug-preferences';
+import { RenderedToolbarAction, TabBarToolbarContribution, TabBarToolbarRegistry } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { DebugWatchWidget } from './view/debug-watch-widget';
 import { DebugWatchExpression } from './view/debug-watch-expression';
 import { DebugWatchManager } from './debug-watch-manager';
@@ -55,6 +57,10 @@ import { nls } from '@theia/core/lib/common/nls';
 import { DebugInstructionBreakpoint } from './model/debug-instruction-breakpoint';
 import { DebugConfiguration } from '../common/debug-configuration';
 import { DebugExceptionBreakpoint } from './view/debug-exception-breakpoint';
+import { DebugToolBar } from './view/debug-toolbar-widget';
+import { ConsoleWidget } from '@theia/console/lib/browser/console-widget';
+import { ConsoleContentWidget } from '@theia/console/lib/browser/console-content-widget';
+import { ConsoleContextMenu } from '@theia/console/lib/browser/console-contribution';
 
 export namespace DebugMenus {
     export const DEBUG = [...MAIN_MENU_BAR, '6_debug'];
@@ -190,11 +196,21 @@ export namespace DebugCommands {
         category: DEBUG_CATEGORY,
         label: 'Add Function Breakpoint',
     });
+    export const ENABLE_SELECTED_BREAKPOINTS = Command.toLocalizedCommand({
+        id: 'debug.breakpoint.enableSelected',
+        category: DEBUG_CATEGORY,
+        label: 'Enable Selected Breakpoints',
+    }, 'theia/debug/enableSelectedBreakpoints', DEBUG_CATEGORY_KEY);
     export const ENABLE_ALL_BREAKPOINTS = Command.toDefaultLocalizedCommand({
         id: 'debug.breakpoint.enableAll',
         category: DEBUG_CATEGORY,
         label: 'Enable All Breakpoints',
     });
+    export const DISABLE_SELECTED_BREAKPOINTS = Command.toLocalizedCommand({
+        id: 'debug.breakpoint.disableSelected',
+        category: DEBUG_CATEGORY,
+        label: 'Disable Selected Breakpoints',
+    }, 'theia/debug/disableSelectedBreakpoints', DEBUG_CATEGORY_KEY);
     export const DISABLE_ALL_BREAKPOINTS = Command.toDefaultLocalizedCommand({
         id: 'debug.breakpoint.disableAll',
         category: DEBUG_CATEGORY,
@@ -229,6 +245,11 @@ export namespace DebugCommands {
         originalLabel: 'Remove Logpoint',
         label: nlsRemoveBreakpoint('Logpoint')
     }, '', DEBUG_CATEGORY_KEY);
+    export const REMOVE_SELECTED_BREAKPOINTS = Command.toLocalizedCommand({
+        id: 'debug.breakpoint.removeSelected',
+        category: DEBUG_CATEGORY,
+        label: 'Remove Selected Breakpoints',
+    }, '', DEBUG_CATEGORY_KEY);
     export const REMOVE_ALL_BREAKPOINTS = Command.toDefaultLocalizedCommand({
         id: 'debug.breakpoint.removeAll',
         category: DEBUG_CATEGORY,
@@ -240,6 +261,26 @@ export namespace DebugCommands {
     export const SHOW_HOVER = Command.toDefaultLocalizedCommand({
         id: 'editor.debug.action.showDebugHover',
         label: 'Debug: Show Hover'
+    });
+    export const EVALUATE_IN_DEBUG_CONSOLE = Command.toDefaultLocalizedCommand({
+        id: 'editor.debug.action.selectionToRepl',
+        category: DEBUG_CATEGORY,
+        label: 'Evaluate in Debug Console'
+    });
+    export const JUMP_TO_CURSOR = Command.toDefaultLocalizedCommand({
+        id: 'editor.debug.action.jumpToCursor',
+        category: DEBUG_CATEGORY,
+        label: 'Jump to Cursor'
+    });
+    export const RUN_TO_CURSOR = Command.toDefaultLocalizedCommand({
+        id: 'editor.debug.action.runToCursor',
+        category: DEBUG_CATEGORY,
+        label: 'Run to Cursor'
+    });
+    export const RUN_TO_LINE = Command.toDefaultLocalizedCommand({
+        id: 'editor.debug.action.runToLine',
+        category: DEBUG_CATEGORY,
+        label: 'Run to Line'
     });
 
     export const RESTART_FRAME = Command.toDefaultLocalizedCommand({
@@ -376,6 +417,12 @@ export namespace DebugEditorContextCommands {
     export const DISABLE_LOGPOINT = {
         id: 'debug.editor.context.logpoint.disable'
     };
+    export const JUMP_TO_CURSOR = {
+        id: 'debug.editor.context.jumpToCursor'
+    };
+    export const RUN_TO_LINE = {
+        id: 'debug.editor.context.runToLine'
+    };
 }
 export namespace DebugBreakpointWidgetCommands {
     export const ACCEPT = {
@@ -422,6 +469,9 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
 
     @inject(EditorManager)
     protected readonly editorManager: EditorManager;
+
+    @inject(MessageService)
+    protected readonly messageService: MessageService;
 
     constructor() {
         super({
@@ -508,7 +558,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
 
     override registerMenus(menus: MenuModelRegistry): void {
         super.registerMenus(menus);
-        const registerMenuActions = (menuPath: string[], ...commands: Command[]) => {
+        const registerMenuActions = (menuPath: string[], ...commands: (Command & { order?: string })[]) => {
             for (const [index, command] of commands.entries()) {
                 const label = command.label;
                 const debug = `${DebugCommands.DEBUG_CATEGORY}:`;
@@ -516,7 +566,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     commandId: command.id,
                     label: label && label.startsWith(debug) && label.slice(debug.length).trimStart() || label,
                     icon: command.iconClass,
-                    order: String.fromCharCode('a'.charCodeAt(0) + index)
+                    order: command.order || String.fromCharCode('a'.charCodeAt(0) + index)
                 });
             }
         };
@@ -580,6 +630,10 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
             DebugCommands.COPY_CALL_STACK
         );
 
+        registerMenuActions(ConsoleContextMenu.CLIPBOARD,
+            { ...DebugCommands.COPY_VARIABLE_VALUE, order: 'a1a' },
+            { ...DebugCommands.COPY_VARIABLE_AS_EXPRESSION, order: 'a1b' }
+        );
         registerMenuActions(DebugVariablesWidget.EDIT_MENU,
             DebugCommands.SET_VARIABLE_VALUE,
             DebugCommands.COPY_VARIABLE_VALUE,
@@ -606,14 +660,25 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         registerMenuActions(DebugBreakpointsWidget.REMOVE_MENU,
             DebugCommands.REMOVE_BREAKPOINT,
             DebugCommands.REMOVE_LOGPOINT,
+            DebugCommands.REMOVE_SELECTED_BREAKPOINTS,
             DebugCommands.REMOVE_ALL_BREAKPOINTS
         );
         registerMenuActions(DebugBreakpointsWidget.ENABLE_MENU,
+            DebugCommands.ENABLE_SELECTED_BREAKPOINTS,
+            DebugCommands.DISABLE_SELECTED_BREAKPOINTS,
             DebugCommands.ENABLE_ALL_BREAKPOINTS,
             DebugCommands.DISABLE_ALL_BREAKPOINTS
         );
 
-        registerMenuActions(DebugEditorModel.CONTEXT_MENU,
+        const DEBUG_EDITOR_CONTEXT_MENU_GROUP = [...EDITOR_CONTEXT_MENU, '2_debug'];
+        registerMenuActions(DEBUG_EDITOR_CONTEXT_MENU_GROUP,
+            DebugCommands.EVALUATE_IN_DEBUG_CONSOLE,
+            DebugCommands.JUMP_TO_CURSOR,
+            DebugCommands.RUN_TO_CURSOR,
+            DebugCommands.RUN_TO_LINE
+        );
+
+        registerMenuActions([...DebugEditorModel.CONTEXT_MENU, '1_breakpoint'],
             { ...DebugEditorContextCommands.ADD_BREAKPOINT, label: nls.localizeByDefault('Add Breakpoint') },
             { ...DebugEditorContextCommands.ADD_CONDITIONAL_BREAKPOINT, label: DebugCommands.ADD_CONDITIONAL_BREAKPOINT.label },
             { ...DebugEditorContextCommands.ADD_LOGPOINT, label: DebugCommands.ADD_LOGPOINT.label },
@@ -626,7 +691,13 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
             { ...DebugEditorContextCommands.ENABLE_LOGPOINT, label: nlsEnableBreakpoint('Logpoint') },
             { ...DebugEditorContextCommands.DISABLE_LOGPOINT, label: nlsDisableBreakpoint('Logpoint') }
         );
-        menus.linkSubmenu(EDITOR_LINENUMBER_CONTEXT_MENU, DebugEditorModel.CONTEXT_MENU, { role: CompoundMenuNodeRole.Group });
+        registerMenuActions([...DebugEditorModel.CONTEXT_MENU, '2_control'],
+            { ...DebugEditorContextCommands.JUMP_TO_CURSOR, label: nls.localizeByDefault('Jump to Cursor') },
+            { ...DebugEditorContextCommands.RUN_TO_LINE, label: DebugCommands.RUN_TO_LINE.label }
+        );
+        menus.linkCompoundMenuNode({ newParentPath: EDITOR_LINENUMBER_CONTEXT_MENU, submenuPath: DebugEditorModel.CONTEXT_MENU });
+
+        menus.registerSubmenu(DebugToolBar.MENU, nls.localize('theia/debug/debugToolbarMenu', 'Debug Toolbar Menu'));
     }
 
     override registerCommands(registry: CommandRegistry): void {
@@ -666,8 +737,13 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
             isEnabled: () => this.manager.state === DebugState.Stopped
         });
         registry.registerCommand(DebugCommands.CONTINUE, {
-            execute: () => this.manager.currentThread && this.manager.currentThread.continue(),
-            isEnabled: () => this.manager.state === DebugState.Stopped
+            execute: () => {
+                if (this.manager.state === DebugState.Stopped && this.manager.currentThread) {
+                    this.manager.currentThread.continue();
+                }
+            },
+            // When there is a debug session, F5 should always be captured by this command
+            isEnabled: () => this.manager.state !== DebugState.Inactive
         });
         registry.registerCommand(DebugCommands.PAUSE, {
             execute: () => this.manager.currentThread && this.manager.currentThread.pause(),
@@ -767,9 +843,19 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
             execute: () => this.breakpointManager.enableAllBreakpoints(true),
             isEnabled: () => this.breakpointManager.hasBreakpoints()
         });
+        registry.registerCommand(DebugCommands.ENABLE_SELECTED_BREAKPOINTS, {
+            execute: () => this.selectedBreakpoints.forEach(breakpoint => breakpoint.setEnabled(true)),
+            isVisible: () => this.selectedBreakpoints.some(breakpoint => !breakpoint.enabled),
+            isEnabled: () => this.selectedBreakpoints.some(breakpoint => !breakpoint.enabled)
+        });
         registry.registerCommand(DebugCommands.DISABLE_ALL_BREAKPOINTS, {
             execute: () => this.breakpointManager.enableAllBreakpoints(false),
             isEnabled: () => this.breakpointManager.hasBreakpoints()
+        });
+        registry.registerCommand(DebugCommands.DISABLE_SELECTED_BREAKPOINTS, {
+            execute: () => this.selectedBreakpoints.forEach(breakpoint => breakpoint.setEnabled(false)),
+            isVisible: () => this.selectedBreakpoints.some(breakpoint => breakpoint.enabled),
+            isEnabled: () => this.selectedBreakpoints.some(breakpoint => breakpoint.enabled)
         });
         registry.registerCommand(DebugCommands.EDIT_BREAKPOINT, {
             execute: async () => {
@@ -780,8 +866,8 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     await selectedFunctionBreakpoint.open();
                 }
             },
-            isEnabled: () => !!this.selectedBreakpoint || !!this.selectedFunctionBreakpoint,
-            isVisible: () => !!this.selectedBreakpoint || !!this.selectedFunctionBreakpoint
+            isEnabled: () => this.selectedBreakpoints.length === 1 && (!!this.selectedBreakpoint || !!this.selectedFunctionBreakpoint),
+            isVisible: () => this.selectedBreakpoints.length === 1 && (!!this.selectedBreakpoint || !!this.selectedFunctionBreakpoint)
         });
         registry.registerCommand(DebugCommands.EDIT_LOGPOINT, {
             execute: async () => {
@@ -790,8 +876,8 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     await this.editors.editBreakpoint(selectedLogpoint);
                 }
             },
-            isEnabled: () => !!this.selectedLogpoint,
-            isVisible: () => !!this.selectedLogpoint
+            isEnabled: () => this.selectedBreakpoints.length === 1 && !!this.selectedLogpoint,
+            isVisible: () => this.selectedBreakpoints.length === 1 && !!this.selectedLogpoint
         });
         registry.registerCommand(DebugCommands.EDIT_BREAKPOINT_CONDITION, {
             execute: async () => {
@@ -800,8 +886,8 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     await selectedExceptionBreakpoint.editCondition();
                 }
             },
-            isEnabled: () => !!this.selectedExceptionBreakpoint?.data.raw.supportsCondition,
-            isVisible: () => !!this.selectedExceptionBreakpoint?.data.raw.supportsCondition
+            isEnabled: () => this.selectedBreakpoints.length === 1 && !!this.selectedExceptionBreakpoint?.data.raw.supportsCondition,
+            isVisible: () => this.selectedBreakpoints.length === 1 && !!this.selectedExceptionBreakpoint?.data.raw.supportsCondition
         });
         registry.registerCommand(DebugCommands.REMOVE_BREAKPOINT, {
             execute: () => {
@@ -810,8 +896,8 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     selectedBreakpoint.remove();
                 }
             },
-            isEnabled: () => Boolean(this.selectedSettableBreakpoint),
-            isVisible: () => Boolean(this.selectedSettableBreakpoint),
+            isEnabled: () => this.selectedBreakpoints.length === 1 && Boolean(this.selectedSettableBreakpoint),
+            isVisible: () => this.selectedBreakpoints.length === 1 && Boolean(this.selectedSettableBreakpoint),
         });
         registry.registerCommand(DebugCommands.REMOVE_LOGPOINT, {
             execute: () => {
@@ -820,13 +906,18 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     selectedLogpoint.remove();
                 }
             },
-            isEnabled: () => !!this.selectedLogpoint,
-            isVisible: () => !!this.selectedLogpoint
+            isEnabled: () => this.selectedBreakpoints.length === 1 && !!this.selectedLogpoint,
+            isVisible: () => this.selectedBreakpoints.length === 1 && !!this.selectedLogpoint
         });
         registry.registerCommand(DebugCommands.REMOVE_ALL_BREAKPOINTS, {
             execute: () => this.breakpointManager.removeBreakpoints(),
             isEnabled: () => this.breakpointManager.hasBreakpoints(),
             isVisible: widget => !(widget instanceof Widget) || (widget instanceof DebugBreakpointsWidget)
+        });
+        registry.registerCommand(DebugCommands.REMOVE_SELECTED_BREAKPOINTS, {
+            execute: () => this.selectedBreakpoints.forEach(breakpoint => breakpoint.remove()),
+            isEnabled: () => this.selectedBreakpoints.length > 1,
+            isVisible: widget => (!(widget instanceof Widget) || (widget instanceof DebugBreakpointsWidget)) && this.selectedBreakpoints.length > 1
         });
         registry.registerCommand(DebugCommands.TOGGLE_BREAKPOINTS_ENABLED, {
             execute: () => this.breakpointManager.breakpointsEnabled = !this.breakpointManager.breakpointsEnabled,
@@ -835,6 +926,58 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         registry.registerCommand(DebugCommands.SHOW_HOVER, {
             execute: () => this.editors.showHover(),
             isEnabled: () => this.editors.canShowHover()
+        });
+
+        registry.registerCommand(DebugCommands.EVALUATE_IN_DEBUG_CONSOLE, {
+            execute: async () => {
+                const { model } = this.editors;
+                if (model) {
+                    const { editor } = model;
+                    const { selection, document } = editor;
+                    const value = document.getText(selection) || document.getLineContent(selection.start.line + 1).trim();
+                    const consoleWidget = await this.console.openView({ reveal: true, activate: false });
+                    await consoleWidget.execute(value);
+                }
+            },
+            isEnabled: () => !!this.editors.model && !!this.manager.currentFrame,
+            isVisible: () => !!this.editors.model && !!this.manager.currentFrame
+        });
+
+        registry.registerCommand(DebugCommands.JUMP_TO_CURSOR, {
+            execute: () => {
+                const model = this.editors.model;
+                if (model && this.manager.currentThread) {
+                    this.manager.currentThread.jumpToCursor(
+                        model.editor.getResourceUri(),
+                        model.position
+                    );
+                }
+            },
+            isEnabled: () => !!this.manager.currentThread && this.manager.currentThread.supportsGoto,
+            isVisible: () => !!this.manager.currentThread && this.manager.currentThread.supportsGoto
+        });
+
+        registry.registerCommand(DebugCommands.RUN_TO_CURSOR, {
+            execute: async () => {
+                const { model } = this.editors;
+                if (model) {
+                    const { editor, position } = model;
+                    await this.runTo(editor.getResourceUri(), position.lineNumber, position.column);
+                }
+            },
+            isEnabled: () => !!this.editors.model && !!this.manager.currentThread?.stopped,
+            isVisible: () => !!this.editors.model && !!this.manager.currentThread?.stopped
+        });
+        registry.registerCommand(DebugCommands.RUN_TO_LINE, {
+            execute: async () => {
+                const { model } = this.editors;
+                if (model) {
+                    const { editor, position } = model;
+                    await this.runTo(editor.getResourceUri(), position.lineNumber);
+                }
+            },
+            isEnabled: () => !!this.editors.model && !!this.manager.currentThread?.stopped,
+            isVisible: () => !!this.editors.model && !!this.manager.currentThread?.stopped
         });
 
         registry.registerCommand(DebugCommands.RESTART_FRAME, {
@@ -856,7 +999,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
 
         registry.registerCommand(DebugCommands.SET_VARIABLE_VALUE, {
             execute: () => this.selectedVariable && this.selectedVariable.open(),
-            isEnabled: () => !!this.selectedVariable && this.selectedVariable.supportSetVariable,
+            isEnabled: () => !!this.selectedVariable && this.selectedVariable.supportSetVariable && !this.selectedVariable.readOnly,
             isVisible: () => !!this.selectedVariable && this.selectedVariable.supportSetVariable
         });
         registry.registerCommand(DebugCommands.COPY_VARIABLE_VALUE, {
@@ -871,13 +1014,13 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         });
         registry.registerCommand(DebugCommands.WATCH_VARIABLE, {
             execute: () => {
-                const { selectedVariable, watch } = this;
-                if (selectedVariable && watch) {
-                    watch.viewModel.addWatchExpression(selectedVariable.name);
+                const evaluateName = this.selectedVariable?.evaluateName;
+                if (evaluateName) {
+                    this.watchManager.addWatchExpression(evaluateName);
                 }
             },
-            isEnabled: () => !!this.selectedVariable && !!this.watch,
-            isVisible: () => !!this.selectedVariable && !!this.watch,
+            isEnabled: () => !!this.selectedVariable?.evaluateName,
+            isVisible: () => !!this.selectedVariable?.evaluateName,
         });
 
         // Debug context menu commands
@@ -935,6 +1078,27 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
             execute: position => this.isPosition(position) && this.editors.setBreakpointEnabled(this.asPosition(position), false),
             isEnabled: position => this.isPosition(position) && !!this.editors.getLogpointEnabled(this.asPosition(position)),
             isVisible: position => this.isPosition(position) && !!this.editors.getLogpointEnabled(this.asPosition(position))
+        });
+        registry.registerCommand(DebugEditorContextCommands.JUMP_TO_CURSOR, {
+            execute: position => {
+                if (this.isPosition(position) && this.editors.currentUri && this.manager.currentThread) {
+                    this.manager.currentThread.jumpToCursor(this.editors.currentUri, this.asPosition(position));
+                }
+            },
+            isEnabled: () => !!this.manager.currentThread && this.manager.currentThread.supportsGoto,
+            isVisible: () => !!this.manager.currentThread && this.manager.currentThread.supportsGoto
+        });
+        registry.registerCommand(DebugEditorContextCommands.RUN_TO_LINE, {
+            execute: async position => {
+                if (this.isPosition(position)) {
+                    const { currentUri } = this.editors;
+                    if (currentUri) {
+                        await this.runTo(currentUri, position.lineNumber);
+                    }
+                }
+            },
+            isEnabled: position => this.isPosition(position) && !!this.editors.currentUri && !!this.manager.currentThread?.stopped,
+            isVisible: position => this.isPosition(position) && !!this.editors.currentUri && !!this.manager.currentThread?.stopped
         });
 
         registry.registerCommand(DebugBreakpointWidgetCommands.ACCEPT, {
@@ -1011,11 +1175,13 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         super.registerKeybindings(keybindings);
         keybindings.registerKeybinding({
             command: DebugCommands.START.id,
-            keybinding: 'f5'
+            keybinding: 'f5',
+            when: '!inDebugMode'
         });
         keybindings.registerKeybinding({
             command: DebugCommands.START_NO_DEBUG.id,
-            keybinding: 'ctrl+f5'
+            keybinding: 'ctrl+f5',
+            when: '!inDebugMode'
         });
         keybindings.registerKeybinding({
             command: DebugCommands.STOP.id,
@@ -1068,18 +1234,18 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         keybindings.registerKeybinding({
             command: DebugBreakpointWidgetCommands.ACCEPT.id,
             keybinding: 'enter',
-            when: 'breakpointWidgetFocus'
+            when: 'breakpointWidgetFocus && !suggestWidgetVisible'
         });
         keybindings.registerKeybinding({
             command: DebugBreakpointWidgetCommands.CLOSE.id,
             keybinding: 'esc',
-            when: 'isBreakpointWidgetVisible || breakpointWidgetFocus'
+            when: 'isBreakpointWidgetVisible || (breakpointWidgetFocus && !suggestWidgetVisible)'
         });
     }
 
     registerToolbarItems(toolbar: TabBarToolbarRegistry): void {
         const onDidChangeToggleBreakpointsEnabled = new Emitter<void>();
-        const toggleBreakpointsEnabled: Mutable<TabBarToolbarItem> = {
+        const toggleBreakpointsEnabled: Mutable<RenderedToolbarAction> = {
             id: DebugCommands.TOGGLE_BREAKPOINTS_ENABLED.id,
             command: DebugCommands.TOGGLE_BREAKPOINTS_ENABLED.id,
             icon: codicon('activate-breakpoints'),
@@ -1184,6 +1350,87 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         await this.manager.start(current);
     }
 
+    async runTo(uri: URI, line: number, column?: number): Promise<void> {
+        const thread = this.manager.currentThread;
+        if (!thread) {
+            return;
+        }
+        const checkThread = () => {
+            if (thread.stopped && thread === this.manager.currentThread) {
+                return true;
+            }
+            console.warn('Cannot run to the specified location. The current thread has changed or is not stopped.');
+            return false;
+        };
+        if (!checkThread()) {
+            return;
+        }
+        const breakpoint = SourceBreakpoint.create(uri, { line, column });
+        let shouldRemoveBreakpoint = this.breakpointManager.addBreakpoint(breakpoint);
+        const removeBreakpoint = () => {
+            const breakpoints = this.breakpointManager.getBreakpoints(uri);
+            const newBreakpoints = breakpoints.filter(bp => bp.id !== breakpoint.id);
+            if (breakpoints.length !== newBreakpoints.length) {
+                this.breakpointManager.setBreakpoints(uri, newBreakpoints);
+            }
+        };
+        try {
+            const sessionBreakpoint = await this.verifyBreakpoint(breakpoint, thread.session);
+            if (!checkThread()) {
+                return;
+            }
+            if (!sessionBreakpoint || !sessionBreakpoint.installed || !sessionBreakpoint.verified) {
+                this.messageService.warn(nls.localize('theia/debug/cannotRunToThisLocation',
+                    'Could not run the current thread to the specified location.'
+                ));
+                return;
+            }
+            const rawBreakpoint = sessionBreakpoint.raw!; // an installed breakpoint always has the underlying raw breakpoint
+            if (rawBreakpoint.line !== line || (column && rawBreakpoint.column !== column)) {
+                const shouldRun = await new ConfirmDialog({
+                    title: nls.localize('theia/debug/confirmRunToShiftedPosition_title',
+                        'Cannot run the current thread to exactly the specified location'),
+                    msg: nls.localize('theia/debug/confirmRunToShiftedPosition_msg',
+                        'The target position will be shifted to Ln {0}, Col {1}. Run anyway?', rawBreakpoint.line, rawBreakpoint.column || 1),
+                    ok: Dialog.YES,
+                    cancel: Dialog.NO
+                }).open();
+                if (!shouldRun || !checkThread()) {
+                    return;
+                }
+            }
+            if (shouldRemoveBreakpoint) {
+                Event.toPromise(Event.filter(
+                    Event.any(this.manager.onDidStopDebugSession, this.manager.onDidDestroyDebugSession),
+                    session => session === thread.session
+                )).then(removeBreakpoint);
+            }
+            await thread.continue();
+            shouldRemoveBreakpoint = false;
+        } finally {
+            if (shouldRemoveBreakpoint) {
+                removeBreakpoint();
+            }
+        }
+    }
+
+    protected async verifyBreakpoint(breakpoint: SourceBreakpoint, session: DebugSession, timeout = 2000): Promise<DebugBreakpoint | undefined> {
+        let sessionBreakpoint = session.getBreakpoint(breakpoint.id);
+        if (!sessionBreakpoint || !sessionBreakpoint.installed || !sessionBreakpoint.verified) {
+            try {
+                await waitForEvent(Event.filter(session.onDidChangeBreakpoints, () => {
+                    sessionBreakpoint = session.getBreakpoint(breakpoint.id);
+                    return !!sessionBreakpoint && sessionBreakpoint.installed && sessionBreakpoint.verified;
+                }), timeout); // wait up to `timeout` ms for the breakpoint to become installed and verified
+            } catch (e) {
+                if (!(e instanceof CancellationError)) { // ignore the `CancellationError` on timeout
+                    throw e;
+                }
+            }
+        }
+        return sessionBreakpoint;
+    }
+
     get threads(): DebugThreadsWidget | undefined {
         const { currentWidget } = this.shell;
         return currentWidget instanceof DebugThreadsWidget && currentWidget || undefined;
@@ -1219,6 +1466,13 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         const breakpoint = this.selectedAnyBreakpoint;
         return breakpoint && breakpoint instanceof DebugSourceBreakpoint && !breakpoint.logMessage ? breakpoint : undefined;
     }
+    get selectedBreakpoints(): DebugBreakpoint[] {
+        const { breakpoints } = this;
+        return breakpoints && breakpoints.model.selectedNodes
+            .filter(TreeElementNode.is)
+            .map(node => node.element)
+            .filter(element => element instanceof DebugBreakpoint) as DebugBreakpoint[] || [];
+    }
     get selectedLogpoint(): DebugSourceBreakpoint | undefined {
         const breakpoint = this.selectedAnyBreakpoint;
         return breakpoint && breakpoint instanceof DebugSourceBreakpoint && !!breakpoint.logMessage ? breakpoint : undefined;
@@ -1245,13 +1499,20 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         }
     }
 
+    get consoleWidget(): ConsoleWidget | undefined {
+        const { currentWidget } = this.shell;
+        return currentWidget instanceof ConsoleWidget && currentWidget.id === DebugConsoleContribution.options.id && currentWidget || undefined;
+    }
     get variables(): DebugVariablesWidget | undefined {
         const { currentWidget } = this.shell;
         return currentWidget instanceof DebugVariablesWidget && currentWidget || undefined;
     }
+    get variablesSource(): DebugVariablesWidget | ConsoleContentWidget | undefined {
+        return this.variables ?? this.consoleWidget?.content;
+    }
     get selectedVariable(): DebugVariable | undefined {
-        const { variables } = this;
-        return variables && variables.selectedElement instanceof DebugVariable && variables.selectedElement || undefined;
+        const { variablesSource } = this;
+        return variablesSource && variablesSource.selectedElement instanceof DebugVariable && variablesSource.selectedElement || undefined;
     }
 
     get watch(): DebugWatchWidget | undefined {
@@ -1263,7 +1524,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         return watch && watch.selectedElement instanceof DebugWatchExpression && watch.selectedElement || undefined;
     }
 
-    protected isPosition(position: unknown): boolean {
+    protected isPosition(position: unknown): position is monaco.IPosition {
         return monaco.Position.isIPosition(position);
     }
 
@@ -1281,7 +1542,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#ffff6673',
                     hcDark: '#fff600',
                     hcLight: '#ffff6673'
-                }, description: 'Background color for the highlight of line at the top stack frame position.'
+                }, description: nls.localizeByDefault('Background color for the highlight of line at the top stack frame position.')
             },
             {
                 id: 'editor.focusedStackFrameHighlightBackground',
@@ -1290,7 +1551,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#cee7ce73',
                     hcDark: '#cee7ce',
                     hcLight: '#cee7ce73'
-                }, description: 'Background color for the highlight of line at focused stack frame position.'
+                }, description: nls.localizeByDefault('Background color for the highlight of line at focused stack frame position.')
             },
             // Status bar colors should be aligned with debugging colors from https://code.visualstudio.com/api/references/theme-color#status-bar-colors
             {
@@ -1299,7 +1560,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#CC6633',
                     hcDark: '#CC6633',
                     hcLight: '#B5200D'
-                }, description: 'Status bar background color when a program is being debugged. The status bar is shown in the bottom of the window'
+                }, description: nls.localizeByDefault('Status bar background color when a program is being debugged. The status bar is shown in the bottom of the window')
             },
             {
                 id: 'statusBar.debuggingForeground', defaults: {
@@ -1307,7 +1568,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: 'statusBar.foreground',
                     hcDark: 'statusBar.foreground',
                     hcLight: 'statusBar.foreground'
-                }, description: 'Status bar foreground color when a program is being debugged. The status bar is shown in the bottom of the window'
+                }, description: nls.localizeByDefault('Status bar foreground color when a program is being debugged. The status bar is shown in the bottom of the window')
             },
             {
                 id: 'statusBar.debuggingBorder', defaults: {
@@ -1315,7 +1576,8 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: 'statusBar.border',
                     hcDark: 'statusBar.border',
                     hcLight: 'statusBar.border'
-                }, description: 'Status bar border color separating to the sidebar and editor when a program is being debugged. The status bar is shown in the bottom of the window'
+                }, description: nls.localizeByDefault(
+                    'Status bar border color separating to the sidebar and editor when a program is being debugged. The status bar is shown in the bottom of the window')
             },
             // Debug Exception Widget colors should be aligned with
             // https://github.com/microsoft/vscode/blob/ff5f581425da6230b6f9216ecf19abf6c9d285a6/src/vs/workbench/contrib/debug/browser/exceptionWidget.ts#L23
@@ -1325,7 +1587,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#a31515',
                     hcDark: '#a31515',
                     hcLight: '#a31515'
-                }, description: 'Exception widget border color.',
+                }, description: nls.localizeByDefault('Exception widget border color.'),
             },
             {
                 id: 'debugExceptionWidget.background', defaults: {
@@ -1333,7 +1595,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#f1dfde',
                     hcDark: '#420b0d',
                     hcLight: '#f1dfde'
-                }, description: 'Exception widget background color.'
+                }, description: nls.localizeByDefault('Exception widget background color.')
             },
             // Debug Icon colors should be aligned with
             // https://code.visualstudio.com/api/references/theme-color#debug-icons-colors
@@ -1344,7 +1606,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: '#E51400',
                     hcLight: '#E51400'
                 },
-                description: 'Icon color for breakpoints.'
+                description: nls.localizeByDefault('Icon color for breakpoints.')
             },
             {
                 id: 'debugIcon.breakpointDisabledForeground', defaults: {
@@ -1353,7 +1615,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: '#848484',
                     hcLight: '#848484'
                 },
-                description: 'Icon color for disabled breakpoints.'
+                description: nls.localizeByDefault('Icon color for disabled breakpoints.')
             },
             {
                 id: 'debugIcon.breakpointUnverifiedForeground', defaults: {
@@ -1362,7 +1624,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: '#848484',
                     hcLight: '#848484'
                 },
-                description: 'Icon color for unverified breakpoints.'
+                description: nls.localizeByDefault('Icon color for unverified breakpoints.')
             },
             {
                 id: 'debugIcon.breakpointCurrentStackframeForeground', defaults: {
@@ -1371,7 +1633,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: '#FFCC00',
                     hcLight: '#BE8700'
                 },
-                description: 'Icon color for the current breakpoint stack frame.'
+                description: nls.localizeByDefault('Icon color for the current breakpoint stack frame.')
             },
             {
                 id: 'debugIcon.breakpointStackframeForeground', defaults: {
@@ -1380,7 +1642,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: '#89D185',
                     hcLight: '#89D185'
                 },
-                description: 'Icon color for all breakpoint stack frames.'
+                description: nls.localizeByDefault('Icon color for all breakpoint stack frames.')
             },
             {
                 id: 'debugIcon.startForeground', defaults: {
@@ -1388,7 +1650,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#388A34',
                     hcDark: '#89D185',
                     hcLight: '#388A34'
-                }, description: 'Debug toolbar icon for start debugging.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for start debugging.')
             },
             {
                 id: 'debugIcon.pauseForeground', defaults: {
@@ -1396,7 +1658,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#007ACC',
                     hcDark: '#75BEFF',
                     hcLight: '#007ACC'
-                }, description: 'Debug toolbar icon for pause.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for pause.')
             },
             {
                 id: 'debugIcon.stopForeground', defaults: {
@@ -1404,7 +1666,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#A1260D',
                     hcDark: '#F48771',
                     hcLight: '#A1260D'
-                }, description: 'Debug toolbar icon for stop.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for stop.')
             },
             {
                 id: 'debugIcon.disconnectForeground', defaults: {
@@ -1412,7 +1674,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#A1260D',
                     hcDark: '#F48771',
                     hcLight: '#A1260D'
-                }, description: 'Debug toolbar icon for disconnect.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for disconnect.')
             },
             {
                 id: 'debugIcon.restartForeground', defaults: {
@@ -1420,7 +1682,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#388A34',
                     hcDark: '#89D185',
                     hcLight: '#388A34'
-                }, description: 'Debug toolbar icon for restart.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for restart.')
             },
             {
                 id: 'debugIcon.stepOverForeground', defaults: {
@@ -1428,7 +1690,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#007ACC',
                     hcDark: '#75BEFF',
                     hcLight: '#007ACC',
-                }, description: 'Debug toolbar icon for step over.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for step over.')
             },
             {
                 id: 'debugIcon.stepIntoForeground', defaults: {
@@ -1436,7 +1698,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#007ACC',
                     hcDark: '#75BEFF',
                     hcLight: '#007ACC'
-                }, description: 'Debug toolbar icon for step into.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for step into.')
             },
             {
                 id: 'debugIcon.stepOutForeground', defaults: {
@@ -1444,7 +1706,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#007ACC',
                     hcDark: '#75BEFF',
                     hcLight: '#007ACC',
-                }, description: 'Debug toolbar icon for step over.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for step over.')
             },
             {
                 id: 'debugIcon.continueForeground', defaults: {
@@ -1452,7 +1714,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#007ACC',
                     hcDark: '#75BEFF',
                     hcLight: '#007ACC'
-                }, description: 'Debug toolbar icon for continue.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for continue.')
             },
             {
                 id: 'debugIcon.stepBackForeground', defaults: {
@@ -1460,7 +1722,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: '#007ACC',
                     hcDark: '#75BEFF',
                     hcLight: '#007ACC'
-                }, description: 'Debug toolbar icon for step back.'
+                }, description: nls.localizeByDefault('Debug toolbar icon for step back.')
             },
             {
                 id: 'debugConsole.infoForeground', defaults: {
@@ -1468,7 +1730,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     light: 'editorInfo.foreground',
                     hcDark: 'foreground',
                     hcLight: 'foreground'
-                }, description: 'Foreground color for info messages in debug REPL console.'
+                }, description: 'Foreground color for info messages in debug REPL console.' // this description is present in VS Code, but is not currently localized there
             },
             {
                 id: 'debugConsole.warningForeground', defaults: {
@@ -1477,7 +1739,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: '#008000',
                     hcLight: 'editorWarning.foreground'
                 },
-                description: 'Foreground color for warning messages in debug REPL console.'
+                description: 'Foreground color for warning messages in debug REPL console.' // this description is present in VS Code, but is not currently localized there
             },
             {
                 id: 'debugConsole.errorForeground', defaults: {
@@ -1486,7 +1748,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: 'errorForeground',
                     hcLight: 'errorForeground'
                 },
-                description: 'Foreground color for error messages in debug REPL console.',
+                description: 'Foreground color for error messages in debug REPL console.', // this description is present in VS Code, but is not currently localized there
             },
             {
                 id: 'debugConsole.sourceForeground', defaults: {
@@ -1495,7 +1757,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: 'foreground',
                     hcLight: 'foreground'
                 },
-                description: 'Foreground color for source filenames in debug REPL console.',
+                description: 'Foreground color for source filenames in debug REPL console.', // this description is present in VS Code, but is not currently localized there
             },
             {
                 id: 'debugConsoleInputIcon.foreground', defaults: {
@@ -1504,7 +1766,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
                     hcDark: 'foreground',
                     hcLight: 'foreground'
                 },
-                description: 'Foreground color for debug console input marker icon.'
+                description: 'Foreground color for debug console input marker icon.' // this description is present in VS Code, but is not currently localized there
             }
         );
     }

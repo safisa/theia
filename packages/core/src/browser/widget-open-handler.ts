@@ -24,7 +24,10 @@ import { WidgetManager } from './widget-manager';
 
 export type WidgetOpenMode = 'open' | 'reveal' | 'activate';
 /**
- * `WidgetOpenerOptions` define serializable generic options used by the {@link WidgetOpenHandler}.
+ * `WidgetOpenerOptions` define generic options used by the {@link WidgetOpenHandler}.
+ *
+ * _Note:_ This object may contain references to widgets (e.g. `widgetOptions.ref`);
+ * these need to be transformed before it can be serialized.
  */
 export interface WidgetOpenerOptions extends OpenerOptions {
     /**
@@ -87,16 +90,16 @@ export abstract class WidgetOpenHandler<W extends BaseWidget> implements OpenHan
      */
     async open(uri: URI, options?: WidgetOpenerOptions): Promise<W> {
         const widget = await this.getOrCreateWidget(uri, options);
-        await this.doOpen(widget, options);
+        await this.doOpen(widget, uri, options);
         return widget;
     }
-    protected async doOpen(widget: W, options?: WidgetOpenerOptions): Promise<void> {
+    protected async doOpen(widget: W, uri: URI, options?: WidgetOpenerOptions): Promise<void> {
         const op: WidgetOpenerOptions = {
             mode: 'activate',
             ...options
         };
         if (!widget.isAttached) {
-            this.shell.addWidget(widget, op.widgetOptions || { area: 'main' });
+            await this.shell.addWidget(widget, op.widgetOptions || { area: 'main' });
         }
         if (op.mode === 'activate') {
             await this.shell.activateWidget(widget.id);
@@ -143,12 +146,12 @@ export abstract class WidgetOpenHandler<W extends BaseWidget> implements OpenHan
 
     protected getWidget(uri: URI, options?: WidgetOpenerOptions): Promise<W | undefined> {
         const widgetOptions = this.createWidgetOptions(uri, options);
-        return this.widgetManager.getWidget<W>(this.id, widgetOptions);
+        return this.widgetManager.getWidget(this.id, widgetOptions);
     }
 
     protected getOrCreateWidget(uri: URI, options?: WidgetOpenerOptions): Promise<W> {
         const widgetOptions = this.createWidgetOptions(uri, options);
-        return this.widgetManager.getOrCreateWidget<W>(this.id, widgetOptions);
+        return this.widgetManager.getOrCreateWidget(this.id, widgetOptions);
     }
 
     protected abstract createWidgetOptions(uri: URI, options?: WidgetOpenerOptions): Object;

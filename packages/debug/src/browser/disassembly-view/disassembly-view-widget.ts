@@ -26,9 +26,9 @@ import { nls } from '@theia/core';
 import { BareFontInfo } from '@theia/monaco-editor-core/esm/vs/editor/common/config/fontInfo';
 import { WorkbenchTable } from '@theia/monaco-editor-core/esm/vs/platform/list/browser/listService';
 import { DebugState, DebugSession } from '../debug-session';
-import { EditorPreferences } from '@theia/editor/lib/browser';
-import { PixelRatio } from '@theia/monaco-editor-core/esm/vs/base/browser/browser';
-import { DebugPreferences } from '../debug-preferences';
+import { EditorPreferences } from '@theia/editor/lib/common/editor-preferences';
+import { PixelRatio } from '@theia/monaco-editor-core/esm/vs/base/browser/pixelRatio';
+import { DebugPreferences } from '../../common/debug-preferences';
 import { DebugThread } from '../model/debug-thread';
 import { Event } from '@theia/monaco-editor-core/esm/vs/base/common/event';
 import { DisassembledInstructionEntry } from './disassembly-view-utilities';
@@ -89,8 +89,8 @@ export class DisassemblyViewWidget extends BaseWidget {
         this.node.tabIndex = -1;
         this.node.style.outline = 'none';
         this._previousDebuggingState = this.debugSessionManager.currentSession?.state ?? DebugState.Inactive;
-        this._fontInfo = BareFontInfo.createFromRawSettings(this.toFontInfo(), PixelRatio.value);
-        this.editorPreferences.onPreferenceChanged(() => this._fontInfo = BareFontInfo.createFromRawSettings(this.toFontInfo(), PixelRatio.value));
+        this._fontInfo = BareFontInfo.createFromRawSettings(this.toFontInfo(), PixelRatio.getInstance(window).value);
+        this.editorPreferences.onPreferenceChanged(() => this._fontInfo = BareFontInfo.createFromRawSettings(this.toFontInfo(), PixelRatio.getInstance(window).value));
         this.debugPreferences.onPreferenceChanged(e => {
             if (e.preferenceName === 'debug.disassemblyView.showSourceCode' && e.newValue !== this._enableSourceCodeRender) {
                 this._enableSourceCodeRender = e.newValue;
@@ -128,7 +128,7 @@ export class DisassemblyViewWidget extends BaseWidget {
 
     protected createPane(): void {
         this._enableSourceCodeRender = this.debugPreferences['debug.disassemblyView.showSourceCode'];
-        const monacoInstantiationService = StandaloneServices.initialize({});
+        const monacoInstantiationService = StandaloneServices.get(IInstantiationService);
         const tableDelegate = new DisassemblyViewTableDelegate(this);
         const instructionRenderer = monacoInstantiationService.createInstance(InstructionRenderer, this, this.openerService, { asCanonicalUri(thing: Uri): Uri { return thing; } });
         this.toDispose.push(instructionRenderer);

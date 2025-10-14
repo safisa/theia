@@ -20,18 +20,18 @@ import { LogPart, KeysToAnyValues, KeysToKeysToAnyValue } from './types';
 import { CharacterPair, CommentRule, PluginAPIFactory, Plugin, ThemeIcon } from './plugin-api-rpc';
 import { ExtPluginApi } from './plugin-ext-api-contribution';
 import { IJSONSchema, IJSONSchemaSnippet } from '@theia/core/lib/common/json-schema';
-import { RecursivePartial } from '@theia/core/lib/common/types';
-import { PreferenceSchema, PreferenceSchemaProperties } from '@theia/core/lib/common/preferences/preference-schema';
 import { ProblemMatcherContribution, ProblemPatternContribution, TaskDefinition } from '@theia/task/lib/common';
 import { ColorDefinition } from '@theia/core/lib/common/color';
 import { ResourceLabelFormatter } from '@theia/core/lib/common/label-protocol';
 import { PluginIdentifiers } from './plugin-identifiers';
+import { JSONObject } from '@theia/core/shared/@lumino/coreutils';
+import { PreferenceSchema } from '@theia/core';
 
 export { PluginIdentifiers };
 export const hostedServicePath = '/services/hostedPlugin';
 
 /**
- * Plugin engine (API) type, i.e. 'theiaPlugin', 'vscode', etc.
+ * Plugin engine (API) type, i.e. 'theiaPlugin', 'vscode', 'theiaHeadlessPlugin', etc.
  */
 export type PluginEngine = string;
 
@@ -49,6 +49,8 @@ export interface PluginPackage {
     theiaPlugin?: {
         frontend?: string;
         backend?: string;
+        /* Requires the `@theia/plugin-ext-headless` extension. */
+        headless?: string;
     };
     main?: string;
     browser?: string;
@@ -74,8 +76,8 @@ export namespace PluginPackage {
  */
 export interface PluginPackageContribution {
     authentication?: PluginPackageAuthenticationProvider[];
-    configuration?: RecursivePartial<PreferenceSchema> | RecursivePartial<PreferenceSchema>[];
-    configurationDefaults?: RecursivePartial<PreferenceSchemaProperties>;
+    configuration?: JSONObject | JSONObject[];
+    configurationDefaults?: JSONObject;
     languages?: PluginPackageLanguageContribution[];
     grammars?: PluginPackageGrammarsContribution[];
     customEditors?: PluginPackageCustomEditor[];
@@ -101,6 +103,8 @@ export interface PluginPackageContribution {
     terminal?: PluginPackageTerminal;
     notebooks?: PluginPackageNotebook[];
     notebookRenderer?: PluginNotebookRendererContribution[];
+    notebookPreload?: PluginPackageNotebookPreload[];
+    mcpServerDefinitionProviders?: PluginPackageMcpServerDefinitionProviderContribution[];
 }
 
 export interface PluginPackageNotebook {
@@ -116,6 +120,17 @@ export interface PluginNotebookRendererContribution {
     readonly mimeTypes: string[];
     readonly entrypoint: string | { readonly extends: string; readonly path: string };
     readonly requiresMessaging?: 'always' | 'optional' | 'never'
+}
+
+export interface PluginPackageNotebookPreload {
+    type: string;
+    entrypoint: string;
+}
+
+export interface PluginPackageMcpServerDefinitionProviderContribution {
+    id: string;
+    label: string;
+    description?: string;
 }
 
 export interface PluginPackageAuthenticationProvider {
@@ -185,11 +200,13 @@ export interface PluginPackageViewWelcome {
     view: string;
     contents: string;
     when?: string;
+    enablement?: string;
 }
 
 export interface PluginPackageCommand {
     command: string;
     title: string;
+    shortTitle?: string;
     original?: string;
     category?: string;
     icon?: string | { light: string; dark: string; };
@@ -445,7 +462,9 @@ export enum PluginDeployerEntryType {
 
     FRONTEND,
 
-    BACKEND
+    BACKEND,
+
+    HEADLESS // Deployed in the Theia Node server outside the context of a frontend/backend connection
 }
 
 /**
@@ -571,6 +590,7 @@ export interface PluginModel {
 export interface PluginEntryPoint {
     frontend?: string;
     backend?: string;
+    headless?: string;
 }
 
 /**
@@ -580,7 +600,7 @@ export interface PluginContribution {
     activationEvents?: string[];
     authentication?: AuthenticationProviderInformation[];
     configuration?: PreferenceSchema[];
-    configurationDefaults?: PreferenceSchemaProperties;
+    configurationDefaults?: JSONObject;
     languages?: LanguageContribution[];
     grammars?: GrammarsContribution[];
     customEditors?: CustomEditor[];
@@ -605,8 +625,8 @@ export interface PluginContribution {
     terminalProfiles?: TerminalProfile[];
     notebooks?: NotebookContribution[];
     notebookRenderer?: NotebookRendererContribution[];
+    notebookPreload?: notebookPreloadContribution[];
 }
-
 export interface NotebookContribution {
     type: string;
     displayName: string;
@@ -620,6 +640,11 @@ export interface NotebookRendererContribution {
     readonly mimeTypes: string[];
     readonly entrypoint: string | { readonly extends: string; readonly path: string };
     readonly requiresMessaging?: 'always' | 'optional' | 'never'
+}
+
+export interface notebookPreloadContribution {
+    type: string;
+    entrypoint: string;
 }
 
 export interface AuthenticationProviderInformation {
@@ -836,12 +861,14 @@ export interface ViewWelcome {
     view: string;
     content: string;
     when?: string;
+    enablement?: string;
     order: number;
 }
 
 export interface PluginCommand {
     command: string;
     title: string;
+    shortTitle?: string;
     originalTitle?: string;
     category?: string;
     iconUrl?: IconUrl;
@@ -965,7 +992,9 @@ export const PluginDeployerHandler = Symbol('PluginDeployerHandler');
 export interface PluginDeployerHandler {
     deployFrontendPlugins(frontendPlugins: PluginDeployerEntry[]): Promise<number | undefined>;
     deployBackendPlugins(backendPlugins: PluginDeployerEntry[]): Promise<number | undefined>;
+    getDeployedPluginIds(): Promise<readonly PluginIdentifiers.VersionedId[]>;
 
+    getDeployedPlugins(): Promise<DeployedPlugin[]>;
     getDeployedPluginsById(pluginId: string): DeployedPlugin[];
 
     getDeployedPlugin(pluginId: PluginIdentifiers.VersionedId): DeployedPlugin | undefined;
@@ -974,6 +1003,7 @@ export interface PluginDeployerHandler {
      * Unless `--uncompressed-plugins-in-place` is passed to the CLI, this operation is safe.
      */
     uninstallPlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean>;
+
     /**
      * Removes the plugin from the locations to which it had been deployed.
      * This operation is not safe - references to deleted assets may remain.
@@ -981,10 +1011,22 @@ export interface PluginDeployerHandler {
     undeployPlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean>;
 
     getPluginDependencies(pluginToBeInstalled: PluginDeployerEntry): Promise<PluginDependencies | undefined>;
-}
 
-export interface GetDeployedPluginsParams {
-    pluginIds: PluginIdentifiers.VersionedId[]
+    /**
+     * Marks the given plugins as "disabled". While the plugin remains installed, it will no longer
+     * be used. Has no effect if the plugin is not installed
+     * @param pluginId the plugin to disable
+     * @returns whether the plugin was installed, enabled and could be disabled
+     */
+    disablePlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean>;
+
+    /**
+     * Marks the given plugins as "enabled". Has no effect if the plugin is not installed.
+     * @param pluginId the plugin to enabled
+     * @returns whether the plugin was installed, disabled and could be enabled
+     */
+    enablePlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean>;
+
 }
 
 export interface DeployedPlugin {
@@ -1003,7 +1045,9 @@ export interface HostedPluginServer extends RpcServer<HostedPluginClient> {
 
     getUninstalledPluginIds(): Promise<readonly PluginIdentifiers.VersionedId[]>;
 
-    getDeployedPlugins(params: GetDeployedPluginsParams): Promise<DeployedPlugin[]>;
+    getDisabledPluginIds(): Promise<readonly PluginIdentifiers.VersionedId[]>;
+
+    getDeployedPlugins(ids: PluginIdentifiers.VersionedId[]): Promise<DeployedPlugin[]>;
 
     getExtPluginAPI(): Promise<ExtPluginApi[]>;
 
@@ -1026,9 +1070,6 @@ export interface PluginDeployOptions {
     ignoreOtherVersions?: boolean;
 }
 
-/**
- * The JSON-RPC workspace interface.
- */
 export const pluginServerJsonRpcPath = '/services/plugin-ext';
 export const PluginServer = Symbol('PluginServer');
 export interface PluginServer {
@@ -1038,9 +1079,15 @@ export interface PluginServer {
      *
      * @param type whether a plugin is installed by a system or a user, defaults to a user
      */
-    deploy(pluginEntry: string, type?: PluginType, options?: PluginDeployOptions): Promise<void>;
+    install(pluginEntry: string, type?: PluginType, options?: PluginDeployOptions): Promise<void>;
     uninstall(pluginId: PluginIdentifiers.VersionedId): Promise<void>;
-    undeploy(pluginId: PluginIdentifiers.VersionedId): Promise<void>;
+
+    enablePlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean>;
+    disablePlugin(pluginId: PluginIdentifiers.VersionedId): Promise<boolean>;
+
+    getInstalledPlugins(): Promise<readonly PluginIdentifiers.VersionedId[]>;
+    getUninstalledPlugins(): Promise<readonly PluginIdentifiers.VersionedId[]>;
+    getDisabledPlugins(): Promise<readonly PluginIdentifiers.VersionedId[]>;
 
     setStorageValue(key: string, value: KeysToAnyValues, kind: PluginStorageKind): Promise<boolean>;
     getStorageValue(key: string, kind: PluginStorageKind): Promise<KeysToAnyValues>;
@@ -1056,17 +1103,6 @@ export interface ServerPluginRunner {
     setClient(client: HostedPluginClient): void;
     setDefault(defaultRunner: ServerPluginRunner): void;
     clientClosed(): void;
-
-    /**
-     * Provides additional deployed plugins.
-     */
-    getExtraDeployedPlugins(): Promise<DeployedPlugin[]>;
-
-    /**
-     * Provides additional plugin ids.
-     */
-    getExtraDeployedPluginIds(): Promise<PluginIdentifiers.VersionedId[]>;
-
 }
 
 export const PluginHostEnvironmentVariable = Symbol('PluginHostEnvironmentVariable');

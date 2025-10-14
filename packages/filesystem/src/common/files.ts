@@ -27,6 +27,7 @@ import type { TextDocumentContentChangeEvent } from '@theia/core/shared/vscode-l
 import { ReadableStreamEvents } from '@theia/core/lib/common/stream';
 import { CancellationToken } from '@theia/core/lib/common/cancellation';
 import { isObject } from '@theia/core/lib/common';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 
 export const enum FileOperation {
     CREATE,
@@ -524,6 +525,7 @@ export interface WatchOptions {
 }
 
 export const enum FileSystemProviderCapabilities {
+    None = 0,
     FileReadWrite = 1 << 1,
     FileOpenReadWriteClose = 1 << 2,
     FileReadStream = 1 << 4,
@@ -765,6 +767,18 @@ export function hasUpdateCapability(provider: FileSystemProvider): provider is F
     return !!(provider.capabilities & FileSystemProviderCapabilities.Update);
 }
 
+export interface ReadOnlyMessageFileSystemProvider {
+    readOnlyMessage: MarkdownString | undefined;
+    readonly onDidChangeReadOnlyMessage: Event<MarkdownString | undefined>;
+}
+
+export namespace ReadOnlyMessageFileSystemProvider {
+    export function is(arg: unknown): arg is ReadOnlyMessageFileSystemProvider {
+        return isObject<ReadOnlyMessageFileSystemProvider>(arg)
+            && 'readOnlyMessage' in arg;
+    }
+}
+
 /**
  * Subtype of {@link FileSystemProvider} that ensures that the optional functions, needed for providers
  * that should be able to read & write files, are implemented.
@@ -956,8 +970,9 @@ export function etag(stat: { mtime: number | undefined, size: number | undefined
 
     return stat.mtime.toString(29) + stat.size.toString(31);
 }
+
 /**
- * Helper to format a raw byte size into a human readable label.
+ * Helper class for formatting and parsing byte sizes.
  */
 export class BinarySize {
     static readonly KB = 1024;
@@ -965,6 +980,9 @@ export class BinarySize {
     static readonly GB = BinarySize.MB * BinarySize.KB;
     static readonly TB = BinarySize.GB * BinarySize.KB;
 
+    /**
+     * Formats a byte size into a human readable string (e.g., "1.5MB", "2.3GB").
+     */
     static formatSize(size: number): string {
         if (size < BinarySize.KB) {
             return size + 'B';
@@ -979,5 +997,42 @@ export class BinarySize {
             return (size / BinarySize.GB).toFixed(2) + 'GB';
         }
         return (size / BinarySize.TB).toFixed(2) + 'TB';
+    }
+
+    /**
+     * Parses a human readable string (e.g., "1.5MB", "2.3GB") and returns the size in bytes
+     */
+    static parseSize(sizeInput: string | number | undefined): number {
+        if (typeof sizeInput === 'number') {
+            return Math.round(sizeInput);
+        }
+
+        if (!sizeInput) {
+            return 0;
+        }
+
+        const trimmed = sizeInput.trim().toUpperCase();
+        const match = /^(\d+(?:\.\d+)?)([BKMG])?$/.exec(trimmed);
+
+        // If the format is invalid, return 0
+        if (!match) {
+            return 0;
+        }
+
+        const value = parseFloat(match[1]);
+        const unit = match[2];
+
+        switch (unit) {
+            case 'K':
+                return Math.round(value * BinarySize.KB);
+            case 'M':
+                return Math.round(value * BinarySize.MB);
+            case 'G':
+                return Math.round(value * BinarySize.GB);
+            case 'T':
+                return Math.round(value * BinarySize.TB);
+            default:
+                return Math.round(value);
+        }
     }
 }

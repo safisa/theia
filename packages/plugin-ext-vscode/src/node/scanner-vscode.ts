@@ -51,6 +51,10 @@ export class VsCodePluginScanner extends TheiaPluginScanner implements PluginSca
             // Default to using backend
             entryPoint.backend = plugin.main;
         }
+        if (plugin.theiaPlugin?.headless) {
+            // Support the Theia-specific extension for headless plugins
+            entryPoint.headless = plugin.theiaPlugin?.headless;
+        }
 
         const result: PluginModel = {
             packagePath: plugin.packagePath,
@@ -69,8 +73,8 @@ export class VsCodePluginScanner extends TheiaPluginScanner implements PluginSca
             entryPoint,
             iconUrl: plugin.icon && PluginPackage.toPluginUrl(plugin, plugin.icon),
             l10n: plugin.l10n,
-            readmeUrl: PluginPackage.toPluginUrl(plugin, './README.md'),
-            licenseUrl: PluginPackage.toPluginUrl(plugin, './LICENSE')
+            readmeUrl: this.getReadmeUrl(plugin),
+            licenseUrl: this.getLicenseUrl(plugin)
         };
         return result;
     }
@@ -87,7 +91,7 @@ export class VsCodePluginScanner extends TheiaPluginScanner implements PluginSca
                 // Iterate over the list of dependencies present, and add them to the collection.
                 dependency.forEach((dep: string) => {
                     const dependencyId = dep.toLowerCase();
-                    dependencies.set(dependencyId, VSCodeExtensionUri.toVsxExtensionUriString(dependencyId));
+                    dependencies.set(dependencyId, VSCodeExtensionUri.fromId(dependencyId).toString());
                 });
             }
         }

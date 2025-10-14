@@ -15,7 +15,7 @@
 // *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
-import { PreferenceService, FrontendApplicationContribution, PreferenceLanguageOverrideService } from '@theia/core/lib/browser';
+import { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { EditorManager } from '@theia/editor/lib/browser';
 import { MonacoQuickInputService } from './monaco-quick-input-service';
 import * as monaco from '@theia/monaco-editor-core';
@@ -23,6 +23,7 @@ import { FormattingConflicts, FormattingMode } from '@theia/monaco-editor-core/e
 import { DocumentFormattingEditProvider, DocumentRangeFormattingEditProvider } from '@theia/monaco-editor-core/esm/vs/editor/common/languages';
 import { ITextModel } from '@theia/monaco-editor-core/esm/vs/editor/common/model';
 import { nls } from '@theia/core/lib/common/nls';
+import { PreferenceService, PreferenceLanguageOverrideService } from '@theia/core';
 
 type FormattingEditProvider = DocumentFormattingEditProvider | DocumentRangeFormattingEditProvider;
 
@@ -59,13 +60,13 @@ export class MonacoFormattingConflictsContribution implements FrontendApplicatio
         await this.preferenceService.set(name, formatter);
     }
 
-    private getDefaultFormatter(language: string): string | undefined {
+    private getDefaultFormatter(language: string, resourceURI: string): string | undefined {
         const name = this.preferenceSchema.overridePreferenceName({
             preferenceName: PREFERENCE_NAME,
             overrideIdentifier: language
         });
 
-        return this.preferenceService.get<string>(name);
+        return this.preferenceService.get<string>(name, undefined, resourceURI);
     }
 
     private async selectFormatter<T extends FormattingEditProvider>(
@@ -85,7 +86,7 @@ export class MonacoFormattingConflictsContribution implements FrontendApplicatio
         }
 
         const languageId = currentEditor.editor.document.languageId;
-        const defaultFormatterId = this.getDefaultFormatter(languageId);
+        const defaultFormatterId = this.getDefaultFormatter(languageId, document.uri.toString());
 
         if (defaultFormatterId) {
             const formatter = formatters.find(f => f.extensionId && f.extensionId.value === defaultFormatterId);

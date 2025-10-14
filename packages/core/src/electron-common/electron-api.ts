@@ -17,6 +17,7 @@
 import { NativeKeyboardLayout } from '../common/keyboard/keyboard-layout-provider';
 import { Disposable } from '../common';
 import { FrontendApplicationState, StopReason } from '../common/frontend-application-state';
+import { ThemeMode } from '../common/theme';
 
 export type MenuRole = ('undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll' | 'about' | 'services' | 'hide' | 'hideOthers' | 'unhide' | 'quit');
 
@@ -50,16 +51,24 @@ export interface TheiaCoreAPI {
     setMenuBarVisible(visible: boolean, windowName?: string): void;
     setMenu(menu: MenuDto[] | undefined): void;
 
-    popup(menu: MenuDto[], x: number, y: number, onClosed: () => void): Promise<number>;
+    popup(menu: MenuDto[], x: number, y: number, onClosed: () => void, windowName?: string): Promise<number>;
     closePopup(handle: number): void;
 
-    focusWindow(name: string): void;
+    focusWindow(name?: string): void;
 
     showItemInFolder(fsPath: string): void;
+
+    getPathForFile(file: File): string;
+
+    /**
+     * @param location The location to open with the system app. This can be a file path or a URL.
+     */
+    openWithSystemApp(location: string): void;
 
     getTitleBarStyleAtStartup(): Promise<string>;
     setTitleBarStyle(style: string): void;
     setBackgroundColor(backgroundColor: string): void;
+    setTheme(theme: ThemeMode): void;
     minimize(): void;
     isMaximized(): boolean; // TODO: this should really be async, since it blocks the renderer process
     maximize(): void;
@@ -69,9 +78,12 @@ export interface TheiaCoreAPI {
     onAboutToClose(handler: () => void): Disposable;
     setCloseRequestHandler(handler: (reason: StopReason) => Promise<boolean>): void;
 
+    setOpenUrlHandler(handler: (url: string) => Promise<boolean>): void;
+
     setSecondaryWindowCloseRequestHandler(windowName: string, handler: () => Promise<boolean>): void;
 
     toggleDevTools(): void;
+    openDevToolsForWindow(windowName: string): void;
     getZoomLevel(): Promise<number>;
     setZoomLevel(desired: number): void;
 
@@ -79,7 +91,7 @@ export interface TheiaCoreAPI {
     isFullScreen(): boolean; // TODO: this should really be async, since it blocks the renderer process
     toggleFullScreen(): void;
 
-    requestReload(): void;
+    requestReload(newUrl?: string): void;
     restart(): void;
 
     applicationStateChanged(state: FrontendApplicationState): void;
@@ -112,21 +124,25 @@ export const CHANNEL_FOCUS_WINDOW = 'FocusWindow';
 export const CHANNEL_SHOW_OPEN = 'ShowOpenDialog';
 export const CHANNEL_SHOW_SAVE = 'ShowSaveDialog';
 export const CHANNEL_SHOW_ITEM_IN_FOLDER = 'ShowItemInFolder';
+export const CHANNEL_OPEN_WITH_SYSTEM_APP = 'OpenWithSystemApp';
 export const CHANNEL_ATTACH_SECURITY_TOKEN = 'AttachSecurityToken';
 
 export const CHANNEL_GET_TITLE_STYLE_AT_STARTUP = 'GetTitleStyleAtStartup';
 export const CHANNEL_SET_TITLE_STYLE = 'SetTitleStyle';
 export const CHANNEL_SET_BACKGROUND_COLOR = 'SetBackgroundColor';
+export const CHANNEL_SET_THEME = 'SetTheme';
 export const CHANNEL_CLOSE = 'Close';
 export const CHANNEL_MINIMIZE = 'Minimize';
 export const CHANNEL_MAXIMIZE = 'Maximize';
 export const CHANNEL_IS_MAXIMIZED = 'IsMaximized';
 
 export const CHANNEL_ABOUT_TO_CLOSE = 'AboutToClose';
+export const CHANNEL_OPEN_URL = 'OpenUrl';
 
 export const CHANNEL_UNMAXIMIZE = 'UnMaximize';
 export const CHANNEL_ON_WINDOW_EVENT = 'OnWindowEvent';
 export const CHANNEL_TOGGLE_DEVTOOLS = 'ToggleDevtools';
+export const CHANNEL_OPEN_DEVTOOLS_FOR_WINDOW = 'OpenDevtoolsForWindow';
 export const CHANNEL_GET_ZOOM_LEVEL = 'GetZoomLevel';
 export const CHANNEL_SET_ZOOM_LEVEL = 'SetZoomLevel';
 export const CHANNEL_IS_FULL_SCREENABLE = 'IsFullScreenable';

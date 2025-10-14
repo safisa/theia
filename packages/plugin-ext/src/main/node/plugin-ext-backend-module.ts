@@ -33,7 +33,7 @@ import { HttpPluginDeployerResolver } from './plugin-http-resolver';
 import { ConnectionHandler, RpcConnectionHandler, bindContributionProvider } from '@theia/core';
 import { PluginPathsService, pluginPathsServicePath } from '../common/plugin-paths-protocol';
 import { PluginPathsServiceImpl } from './paths/plugin-paths-service';
-import { PluginServerHandler } from './plugin-server-handler';
+import { PluginServerImpl } from './plugin-server-impl';
 import { PluginCliContribution } from './plugin-cli-contribution';
 import { PluginTheiaEnvironment } from '../common/plugin-theia-environment';
 import { PluginTheiaDeployerParticipant } from './plugin-theia-deployer-participant';
@@ -42,6 +42,11 @@ import { PluginUninstallationManager } from './plugin-uninstallation-manager';
 import { LocalizationServerImpl } from '@theia/core/lib/node/i18n/localization-server';
 import { PluginLocalizationServer } from './plugin-localization-server';
 import { PluginMgmtCliContribution } from './plugin-mgmt-cli-contribution';
+import { PluginRemoteCliContribution } from './plugin-remote-cli-contribution';
+import { RemoteCliContribution } from '@theia/core/lib/node/remote/remote-cli-contribution';
+import { PluginRemoteCopyContribution } from './plugin-remote-copy-contribution';
+import { RemoteCopyContribution } from '@theia/core/lib/node/remote/remote-copy-contribution';
+import { bindWebviewPreferences } from '../common/webview-preferences';
 
 export function bindMainBackend(bind: interfaces.Bind, unbind: interfaces.Unbind, isBound: interfaces.IsBound, rebind: interfaces.Rebind): void {
     bind(PluginApiContribution).toSelf().inSingletonScope();
@@ -66,7 +71,7 @@ export function bindMainBackend(bind: interfaces.Bind, unbind: interfaces.Unbind
     bind(PluginDeployerFileHandler).to(PluginTheiaFileHandler).inSingletonScope();
     bind(PluginDeployerDirectoryHandler).to(PluginTheiaDirectoryHandler).inSingletonScope();
 
-    bind(PluginServer).to(PluginServerHandler).inSingletonScope();
+    bind(PluginServer).to(PluginServerImpl).inSingletonScope();
 
     bind(PluginsKeyValueStorage).toSelf().inSingletonScope();
 
@@ -89,9 +94,15 @@ export function bindMainBackend(bind: interfaces.Bind, unbind: interfaces.Unbind
     bind(PluginMgmtCliContribution).toSelf().inSingletonScope();
     bind(CliContribution).toService(PluginMgmtCliContribution);
 
+    bind(PluginRemoteCliContribution).toSelf().inSingletonScope();
+    bind(RemoteCliContribution).toService(PluginRemoteCliContribution);
+    bind(PluginRemoteCopyContribution).toSelf().inSingletonScope();
+    bind(RemoteCopyContribution).toService(PluginRemoteCopyContribution);
+
     bind(WebviewBackendSecurityWarnings).toSelf().inSingletonScope();
     bind(BackendApplicationContribution).toService(WebviewBackendSecurityWarnings);
 
     rebind(LocalizationServerImpl).to(PluginLocalizationServer).inSingletonScope();
+    bindWebviewPreferences(bind);
 
 }

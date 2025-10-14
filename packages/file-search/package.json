@@ -1,14 +1,15 @@
 {
   "name": "@theia/file-search",
-  "version": "1.45.0",
+  "version": "1.65.0",
   "description": "Theia - File Search Extension",
   "dependencies": {
-    "@theia/core": "1.45.0",
-    "@theia/editor": "1.45.0",
-    "@theia/filesystem": "1.45.0",
-    "@theia/process": "1.45.0",
-    "@theia/workspace": "1.45.0",
-    "@vscode/ripgrep": "^1.14.2"
+    "@theia/core": "1.65.0",
+    "@theia/editor": "1.65.0",
+    "@theia/filesystem": "1.65.0",
+    "@theia/process": "1.65.0",
+    "@theia/workspace": "1.65.0",
+    "@vscode/ripgrep": "^1.14.2",
+    "tslib": "^2.6.2"
   },
   "publishConfig": {
     "access": "public"
@@ -16,6 +17,7 @@
   "theiaExtensions": [
     {
       "frontend": "lib/browser/file-search-frontend-module",
+      "frontendOnly": "lib/browser-only/file-search-frontend-only-module",
       "backend": "lib/node/file-search-backend-module"
     }
   ],
@@ -44,9 +46,10 @@
     "watch": "theiaext watch"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "1.45.0"
+    "@theia/ext-scripts": "1.65.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"
-  }
+  },
+  "gitHead": "21358137e41342742707f660b8e222f940a27652"
 }

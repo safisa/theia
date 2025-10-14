@@ -13,6 +13,7 @@
 //
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
+import '../../../src/browser/style/debug.css';
 
 import { ConsoleSessionManager } from '@theia/console/lib/browser/console-session-manager';
 import { ConsoleOptions, ConsoleWidget } from '@theia/console/lib/browser/console-widget';
@@ -28,6 +29,7 @@ import { SelectComponent, SelectOption } from '@theia/core/lib/browser/widgets/s
 import { DebugSession } from '../debug-session';
 import { DebugSessionManager, DidChangeActiveDebugSession } from '../debug-session-manager';
 import { DebugConsoleSession, DebugConsoleSessionFactory } from './debug-console-session';
+import { InMemoryResources } from '@theia/core';
 
 export type InDebugReplContextKey = ContextKey<boolean>;
 export const InDebugReplContextKey = Symbol('inDebugReplContextKey');
@@ -56,6 +58,11 @@ export class DebugConsoleContribution extends AbstractViewContribution<ConsoleWi
     @inject(DebugSessionManager)
     protected debugSessionManager: DebugSessionManager;
 
+    @inject(InMemoryResources)
+    protected readonly resources: InMemoryResources;
+
+    protected readonly DEBUG_CONSOLE_SEVERITY_ID = 'debugConsoleSeverity';
+
     constructor() {
         super({
             widgetId: DebugConsoleContribution.options.id,
@@ -70,6 +77,7 @@ export class DebugConsoleContribution extends AbstractViewContribution<ConsoleWi
 
     @postConstruct()
     protected init(): void {
+        this.resources.add(DebugConsoleSession.uri, '');
         this.debugSessionManager.onDidCreateDebugSession(session => {
             const consoleParent = session.findConsoleParent();
             if (consoleParent) {
@@ -152,13 +160,14 @@ export class DebugConsoleContribution extends AbstractViewContribution<ConsoleWi
         }
     };
 
-    static create(parent: interfaces.Container): ConsoleWidget {
+    static async create(parent: interfaces.Container): Promise<ConsoleWidget> {
         const inputFocusContextKey = parent.get<InDebugReplContextKey>(InDebugReplContextKey);
         const child = ConsoleWidget.createContainer(parent, {
             ...DebugConsoleContribution.options,
             inputFocusContextKey
         });
         const widget = child.get(ConsoleWidget);
+        await widget.ready;
         return widget;
     }
 
@@ -188,10 +197,12 @@ export class DebugConsoleContribution extends AbstractViewContribution<ConsoleWi
         }));
 
         return <SelectComponent
+            id={this.DEBUG_CONSOLE_SEVERITY_ID}
             key="debugConsoleSeverity"
             options={severityElements}
             defaultValue={this.consoleSessionManager.severity || Severity.Ignore}
-            onChange={this.changeSeverity} />;
+            onChange={this.changeSeverity}
+        />;
     }
 
     protected renderDebugConsoleSelector(widget: Widget | undefined): React.ReactNode {

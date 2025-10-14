@@ -21,7 +21,7 @@
 // copied and modified from https://github.com/microsoft/vscode/blob/ba40bd16433d5a817bfae15f3b4350e18f144af4/src/vs/workbench/contrib/webview/browser/webviewElement.ts#
 
 import * as mime from 'mime';
-import { JSONExt } from '@theia/core/shared/@phosphor/coreutils';
+import { JSONExt } from '@theia/core/shared/@lumino/coreutils';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { WebviewPanelOptions, WebviewPortMapping } from '@theia/plugin';
 import { BaseWidget, Message } from '@theia/core/lib/browser/widgets/widget';
@@ -41,20 +41,19 @@ import { PluginSharedStyle } from '../plugin-shared-style';
 import { WebviewThemeDataProvider } from './webview-theme-data-provider';
 import { ExternalUriService } from '@theia/core/lib/browser/external-uri-service';
 import { OutputChannelManager } from '@theia/output/lib/browser/output-channel';
-import { WebviewPreferences } from './webview-preferences';
 import { WebviewResourceCache } from './webview-resource-cache';
 import { Endpoint } from '@theia/core/lib/browser/endpoint';
 import { isFirefox } from '@theia/core/lib/browser/browser';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { FileOperationError, FileOperationResult } from '@theia/filesystem/lib/common/files';
 import { BinaryBufferReadableStream } from '@theia/core/lib/common/buffer';
-import { ViewColumn } from '../../../plugin/types-impl';
 import { ExtractableWidget } from '@theia/core/lib/browser/widgets/extractable-widget';
 import { BadgeWidget } from '@theia/core/lib/browser/view-container';
 import { MenuPath } from '@theia/core';
 import { ContextMenuRenderer } from '@theia/core/lib/browser';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { PluginViewWidget } from '../view/plugin-view-widget';
+import { WebviewPreferences } from '../../common/webview-preferences';
 
 // Style from core
 const TRANSPARENT_OVERLAY_STYLE = 'theia-transparent-overlay';
@@ -109,7 +108,8 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
         Schemes.http,
         Schemes.https,
         Schemes.mailto,
-        Schemes.vscode
+        Schemes.vscode,
+        Schemes.vscodeNotebookCell
     ]);
 
     static FACTORY_ID = 'plugin-webview';
@@ -185,7 +185,6 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
     }
 
     viewType: string;
-    viewColumn: ViewColumn;
     options: WebviewPanelOptions = {};
 
     protected ready = new Deferred<void>();
@@ -352,7 +351,7 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
             /* no-op: webview loses focus only if another element gains focus in the main window */
         }));
         this.toHide.push(this.on(WebviewMessageChannels.doReload, () => this.reload()));
-        this.toHide.push(this.on(WebviewMessageChannels.loadResource, (entry: any) => this.loadResource(entry.path)));
+        this.toHide.push(this.on(WebviewMessageChannels.loadResource, (entry: any) => this.loadResource(entry.path, entry.query)));
         this.toHide.push(this.on(WebviewMessageChannels.loadLocalhost, (entry: any) =>
             this.loadLocalhost(entry.origin)
         ));
@@ -408,7 +407,8 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
                     args: [event.context],
                     anchor: {
                         x: domRect.x + event.clientX, y: domRect.y + event.clientY
-                    }
+                    },
+                    context: this.node
                 });
             });
     }
@@ -544,10 +544,11 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
         return undefined;
     }
 
-    protected async loadResource(requestPath: string): Promise<void> {
-        const normalizedUri = this.normalizeRequestUri(requestPath);
+    protected async loadResource(requestPath: string, requestQuery: string = ''): Promise<void> {
+        const normalizedUri = this.normalizeRequestUri(requestPath).withQuery(decodeURIComponent(requestQuery));
         // browser cache does not support file scheme, normalize to current endpoint scheme and host
-        const cacheUrl = new Endpoint({ path: normalizedUri.path.toString() }).getRestUrl().toString();
+        // use requestPath rather than normalizedUri.path to preserve the scheme of the requested resource as a path segment
+        const cacheUrl = new Endpoint({ path: requestPath }).getRestUrl().withQuery(decodeURIComponent(requestQuery)).toString();
 
         try {
             if (this.contentOptions.localResourceRoots) {

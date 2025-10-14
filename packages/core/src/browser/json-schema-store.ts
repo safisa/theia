@@ -17,10 +17,9 @@
 import { injectable, inject, named } from 'inversify';
 import { ContributionProvider } from '../common/contribution-provider';
 import { FrontendApplicationContribution } from './frontend-application-contribution';
-import { MaybePromise } from '../common';
-import { Endpoint } from './endpoint';
+import { Emitter, MaybePromise, URI } from '../common';
 import { timeout, Deferred } from '../common/promise-util';
-import { RequestContext, RequestService } from '@theia/request';
+import { IJSONSchema } from '../common/json-schema';
 
 export interface JsonSchemaConfiguration {
     fileMatch: string | string[];
@@ -94,18 +93,49 @@ export class JsonSchemaStore implements FrontendApplicationContribution {
 }
 
 @injectable()
+export class JsonSchemaDataStore {
+
+    protected readonly _schemas = new Map<string, string>();
+
+    protected readonly onDidSchemaUpdateEmitter = new Emitter<URI>();
+    readonly onDidSchemaUpdate = this.onDidSchemaUpdateEmitter.event;
+
+    hasSchema(uri: URI): boolean {
+        return this._schemas.has(uri.toString());
+    }
+
+    getSchema(uri: URI): string | undefined {
+        return this._schemas.get(uri.toString());
+    }
+
+    setSchema(uri: URI, schema: IJSONSchema | string): void {
+        this._schemas.set(uri.toString(), typeof schema === 'string' ? schema : JSON.stringify(schema));
+        this.notifySchemaUpdate(uri);
+    }
+
+    deleteSchema(uri: URI): void {
+        if (this._schemas.delete(uri.toString())) {
+            this.notifySchemaUpdate(uri);
+        }
+    }
+
+    notifySchemaUpdate(uri: URI): void {
+        this.onDidSchemaUpdateEmitter.fire(uri);
+    }
+
+}
+
+@injectable()
 export class DefaultJsonSchemaContribution implements JsonSchemaContribution {
 
-    @inject(RequestService)
-    protected readonly requestService: RequestService;
-
-    protected readonly jsonSchemaUrl = `${new Endpoint().httpScheme}//schemastore.org/api/json/catalog.json`;
+    private static excludedSchemaUrls = [
+        'https://www.schemastore.org/task.json'
+    ];
 
     async registerSchemas(context: JsonSchemaRegisterContext): Promise<void> {
-        const response = await this.requestService.request({ url: this.jsonSchemaUrl });
-        const schemas = RequestContext.asJson<{ schemas: DefaultJsonSchemaContribution.SchemaData[] }>(response).schemas;
-        for (const s of schemas) {
-            if (s.fileMatch) {
+        const catalog = require('./catalog.json') as { schemas: DefaultJsonSchemaContribution.SchemaData[] };
+        for (const s of catalog.schemas) {
+            if (s.fileMatch && this.shouldRegisterSchema(s)) {
                 context.registerSchema({
                     fileMatch: s.fileMatch,
                     url: s.url
@@ -114,6 +144,9 @@ export class DefaultJsonSchemaContribution implements JsonSchemaContribution {
         }
     }
 
+    protected shouldRegisterSchema(s: DefaultJsonSchemaContribution.SchemaData): boolean {
+        return !DefaultJsonSchemaContribution.excludedSchemaUrls.includes(s.url);
+    }
 }
 export namespace DefaultJsonSchemaContribution {
     export interface SchemaData {

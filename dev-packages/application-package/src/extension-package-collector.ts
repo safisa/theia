@@ -21,48 +21,53 @@ import { ExtensionPackage, ExtensionPackageOptions, RawExtensionPackage } from '
 export class ExtensionPackageCollector {
 
     protected readonly sorted: ExtensionPackage[] = [];
-    protected readonly visited = new Map<string, boolean>();
+    protected readonly visited = new Set<string>();
 
     constructor(
         protected readonly extensionPackageFactory: (raw: PublishedNodePackage, options?: ExtensionPackageOptions) => ExtensionPackage,
-        protected readonly resolveModule: (modulePath: string) => string
+        protected readonly resolveModule: (packagepath: string, modulePath: string) => string
     ) { }
 
     protected root: NodePackage;
-    collect(pck: NodePackage): ReadonlyArray<ExtensionPackage> {
+    collect(packagePath: string, pck: NodePackage): ReadonlyArray<ExtensionPackage> {
         this.root = pck;
-        this.collectPackages(pck);
+        this.collectPackages(packagePath, pck);
         return this.sorted;
     }
 
-    protected collectPackages(pck: NodePackage): void {
+    protected collectPackages(packagePath: string, pck: NodePackage): void {
         for (const [dependency, versionRange] of [
             ...Object.entries(pck.dependencies ?? {}),
             ...Object.entries(pck.peerDependencies ?? {})
         ]) {
-            this.collectPackage(dependency, versionRange!);
+            const optional = pck.peerDependenciesMeta?.[dependency]?.optional || false;
+            this.collectPackage(packagePath, dependency, versionRange!, optional);
         }
     }
 
     protected parent: ExtensionPackage | undefined;
-    protected collectPackagesWithParent(pck: NodePackage, parent: ExtensionPackage): void {
+    protected collectPackagesWithParent(packagePath: string, pck: NodePackage, parent: ExtensionPackage): void {
         const current = this.parent;
         this.parent = parent;
-        this.collectPackages(pck);
+        this.collectPackages(packagePath, pck);
         this.parent = current;
     }
 
-    protected collectPackage(name: string, versionRange: string): void {
+    protected collectPackage(parentPackagePath: string, name: string, versionRange: string, optional: boolean): void {
         if (this.visited.has(name)) {
             return;
         }
-        this.visited.set(name, true);
+        this.visited.add(name);
 
         let packagePath: string | undefined;
         try {
-            packagePath = this.resolveModule(name);
-        } catch {
-            console.debug(`Failed to resolve module: ${name}`);
+            packagePath = this.resolveModule(parentPackagePath, name);
+        } catch (err) {
+            if (optional) {
+                console.log(`Could not resolve optional peer dependency '${name}'. Skipping...`);
+            } else {
+                console.error(err.message);
+            }
         }
         if (!packagePath) {
             return;
@@ -75,7 +80,7 @@ export class ExtensionPackageCollector {
             pck.installed = { packagePath, version, parent, transitive };
             pck.version = versionRange;
             const extensionPackage = this.extensionPackageFactory(pck, { alias: name });
-            this.collectPackagesWithParent(pck, extensionPackage);
+            this.collectPackagesWithParent(packagePath, pck, extensionPackage);
             this.sorted.push(extensionPackage);
         }
     }

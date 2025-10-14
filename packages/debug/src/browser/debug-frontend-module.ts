@@ -40,16 +40,15 @@ import { DebugConsoleContribution } from './console/debug-console-contribution';
 import { BreakpointManager } from './breakpoint/breakpoint-manager';
 import { DebugEditorService } from './editor/debug-editor-service';
 import { DebugEditorModelFactory, DebugEditorModel } from './editor/debug-editor-model';
-import { bindDebugPreferences } from './debug-preferences';
+import { bindDebugPreferences } from '../common/debug-preferences';
 import { DebugSchemaUpdater } from './debug-schema-updater';
 import { DebugCallStackItemTypeKey } from './debug-call-stack-item-type-key';
-import { bindLaunchPreferences } from './preferences/launch-preferences';
+import { bindLaunchPreferences } from '../common/launch-preferences';
 import { DebugPrefixConfiguration } from './debug-prefix-configuration';
 import { CommandContribution } from '@theia/core/lib/common/command';
 import { TabBarToolbarContribution } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { ColorContribution } from '@theia/core/lib/browser/color-application-contribution';
 import { DebugWatchManager } from './debug-watch-manager';
-import { MonacoEditorService } from '@theia/monaco/lib/browser/monaco-editor-service';
 import { DebugBreakpointWidget } from './editor/debug-breakpoint-widget';
 import { DebugInlineValueDecorator } from './editor/debug-inline-value-decorator';
 import { JsonSchemaContribution } from '@theia/core/lib/browser/json-schema-store';
@@ -61,6 +60,9 @@ import { DebugViewModel } from './view/debug-view-model';
 import { DebugToolBar } from './view/debug-toolbar-widget';
 import { DebugSessionWidget } from './view/debug-session-widget';
 import { bindDisassemblyView } from './disassembly-view/disassembly-view-contribution';
+import { StandaloneServices } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices';
+import { ICodeEditorService } from '@theia/monaco-editor-core/esm/vs/editor/browser/services/codeEditorService';
+import { DebugSessionConfigurationLabelProvider } from './debug-session-configuration-label-provider';
 
 export default new ContainerModule((bind: interfaces.Bind) => {
     bindContributionProvider(bind, DebugContribution);
@@ -78,7 +80,7 @@ export default new ContainerModule((bind: interfaces.Bind) => {
         DebugEditorModel.createModel(container, editor)
     )).inSingletonScope();
     bind(DebugEditorService).toSelf().inSingletonScope().onActivation((context, service) => {
-        context.container.get(MonacoEditorService).registerDecorationType('Debug breakpoint placeholder', DebugBreakpointWidget.PLACEHOLDER_DECORATION, {});
+        StandaloneServices.get(ICodeEditorService).registerDecorationType('Debug breakpoint placeholder', DebugBreakpointWidget.PLACEHOLDER_DECORATION, {});
         return service;
     });
 
@@ -129,4 +131,6 @@ export default new ContainerModule((bind: interfaces.Bind) => {
         }));
     }
     bindDisassemblyView(bind);
+
+    bind(DebugSessionConfigurationLabelProvider).toSelf().inSingletonScope();
 });

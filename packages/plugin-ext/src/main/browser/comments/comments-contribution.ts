@@ -24,8 +24,9 @@ import { CommentsService, CommentInfoMain } from './comments-service';
 import { CommentThread } from '../../../common/plugin-api-rpc-model';
 import { CommandRegistry, DisposableCollection, MenuModelRegistry } from '@theia/core/lib/common';
 import { URI } from '@theia/core/shared/vscode-uri';
-import { CommentsContextKeyService } from './comments-context-key-service';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
+import { Uri } from '@theia/plugin';
+import { CommentsContext } from './comments-context';
 
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -42,7 +43,7 @@ export class CommentsContribution {
     private emptyThreadsToAddQueue: [number, EditorMouseEvent | undefined][] = [];
 
     @inject(MenuModelRegistry) protected readonly menus: MenuModelRegistry;
-    @inject(CommentsContextKeyService) protected readonly commentsContextKeyService: CommentsContextKeyService;
+    @inject(CommentsContext) protected readonly commentsContext: CommentsContext;
     @inject(ContextKeyService) protected readonly contextKeyService: ContextKeyService;
     @inject(CommandRegistry) protected readonly commands: CommandRegistry;
 
@@ -64,14 +65,16 @@ export class CommentsContribution {
             if (editor instanceof MonacoDiffEditor) {
                 const originalEditorModel = editor.diffEditor.getOriginalEditor().getModel();
                 if (originalEditorModel) {
-                    const originalComments = await this.commentService.getComments(originalEditorModel.uri);
+                    // need to cast because of vscode issue https://github.com/microsoft/vscode/issues/190584
+                    const originalComments = await this.commentService.getComments(originalEditorModel.uri as Uri);
                     if (originalComments) {
                         this.rangeDecorator.update(editor.diffEditor.getOriginalEditor(), <CommentInfoMain[]>originalComments.filter(c => !!c));
                     }
                 }
                 const modifiedEditorModel = editor.diffEditor.getModifiedEditor().getModel();
                 if (modifiedEditorModel) {
-                    const modifiedComments = await this.commentService.getComments(modifiedEditorModel.uri);
+                    // need to cast because of vscode issue https://github.com/microsoft/vscode/issues/190584
+                    const modifiedComments = await this.commentService.getComments(modifiedEditorModel.uri as Uri);
                     if (modifiedComments) {
                         this.rangeDecorator.update(editor.diffEditor.getModifiedEditor(), <CommentInfoMain[]>modifiedComments.filter(c => !!c));
                     }
@@ -164,7 +167,8 @@ export class CommentsContribution {
         const editorModel = this.editor && this.editor.getModel();
         const editorURI = this.editor && editorModel && editorModel.uri;
         if (editorURI) {
-            const comments = await this.commentService.getComments(editorURI);
+            // need to cast because of vscode issue https://github.com/microsoft/vscode/issues/190584
+            const comments = await this.commentService.getComments(editorURI as Uri);
             this.setComments(<CommentInfoMain[]>comments.filter(c => !!c));
         }
     }
@@ -189,10 +193,10 @@ export class CommentsContribution {
         if (editor) {
             const provider = this.commentService.getCommentController(owner);
             if (provider) {
-                this.commentsContextKeyService.commentController.set(provider.id);
+                this.commentsContext.commentController.set(provider.id);
             }
-            const zoneWidget = new CommentThreadWidget(editor, owner, thread, this.commentService, this.menus, this.commentsContextKeyService, this.commands);
-            zoneWidget.display({ afterLineNumber: thread.range.startLineNumber, heightInLines: 5 });
+            const zoneWidget = new CommentThreadWidget(editor, owner, thread, this.commentService, this.menus, this.commentsContext, this.contextKeyService, this.commands);
+            zoneWidget.display({ afterLineNumber: thread.range?.startLineNumber || 0, heightInLines: 5 });
             const currentEditor = this.getCurrentEditor();
             if (currentEditor) {
                 currentEditor.onDispose(() => zoneWidget.dispose());

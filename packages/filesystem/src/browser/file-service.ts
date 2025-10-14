@@ -51,12 +51,12 @@ import {
     toFileOperationResult, toFileSystemProviderErrorCode,
     ResolveFileResult, ResolveFileResultWithMetadata,
     MoveFileOptions, CopyFileOptions, BaseStatWithMetadata, FileDeleteOptions, FileOperationOptions, hasAccessCapability, hasUpdateCapability,
-    hasFileReadStreamCapability, FileSystemProviderWithFileReadStreamCapability
+    hasFileReadStreamCapability, FileSystemProviderWithFileReadStreamCapability, ReadOnlyMessageFileSystemProvider
 } from '../common/files';
 import { BinaryBuffer, BinaryBufferReadable, BinaryBufferReadableStream, BinaryBufferReadableBufferedStream, BinaryBufferWriteableStream } from '@theia/core/lib/common/buffer';
 import { ReadableStream, isReadableStream, isReadableBufferedStream, transform, consumeStream, peekStream, peekReadable, Readable } from '@theia/core/lib/common/stream';
 import { LabelProvider } from '@theia/core/lib/browser/label-provider';
-import { FileSystemPreferences } from './filesystem-preferences';
+import { FileSystemPreferences } from '../common/filesystem-preferences';
 import { ProgressService } from '@theia/core/lib/common/progress-service';
 import { DelegatingFileSystemProvider } from '../common/delegating-file-system-provider';
 import type { TextDocumentContentChangeEvent } from '@theia/core/shared/vscode-languageserver-protocol';
@@ -68,6 +68,7 @@ import { readFileIntoStream } from '../common/io';
 import { FileSystemWatcherErrorHandler } from './filesystem-watcher-error-handler';
 import { FileSystemUtils } from '../common/filesystem-utils';
 import { nls } from '@theia/core';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 
 export interface FileOperationParticipant {
 
@@ -235,6 +236,15 @@ export interface FileSystemProviderCapabilitiesChangeEvent {
     scheme: string;
 }
 
+export interface FileSystemProviderReadOnlyMessageChangeEvent {
+    /** The affected file system provider for which this event was fired. */
+    provider: FileSystemProvider;
+    /** The uri for which the provider is registered */
+    scheme: string;
+    /** The new read only message */
+    message: MarkdownString | undefined;
+}
+
 /**
  * Represents the `FileSystemProviderActivation` event.
  * This event is fired by the {@link FileService} if it wants to activate the
@@ -342,6 +352,9 @@ export class FileService {
     private onDidChangeFileSystemProviderCapabilitiesEmitter = new Emitter<FileSystemProviderCapabilitiesChangeEvent>();
     readonly onDidChangeFileSystemProviderCapabilities = this.onDidChangeFileSystemProviderCapabilitiesEmitter.event;
 
+    private onDidChangeFileSystemProviderReadOnlyMessageEmitter = new Emitter<FileSystemProviderReadOnlyMessageChangeEvent>();
+    readonly onDidChangeFileSystemProviderReadOnlyMessage = this.onDidChangeFileSystemProviderReadOnlyMessageEmitter.event;
+
     private readonly providers = new Map<string, FileSystemProvider>();
     private readonly activations = new Map<string, Promise<FileSystemProvider>>();
 
@@ -364,6 +377,9 @@ export class FileService {
         providerDisposables.push(provider.onDidChangeFile(changes => this.onDidFilesChangeEmitter.fire(new FileChangesEvent(changes))));
         providerDisposables.push(provider.onFileWatchError(() => this.handleFileWatchError()));
         providerDisposables.push(provider.onDidChangeCapabilities(() => this.onDidChangeFileSystemProviderCapabilitiesEmitter.fire({ provider, scheme })));
+        if (ReadOnlyMessageFileSystemProvider.is(provider)) {
+            providerDisposables.push(provider.onDidChangeReadOnlyMessage(message => this.onDidChangeFileSystemProviderReadOnlyMessageEmitter.fire({ provider, scheme, message })));
+        }
 
         return Disposable.create(() => {
             this.onDidChangeFileSystemProviderRegistrationsEmitter.fire({ added: false, scheme, provider });
@@ -403,6 +419,10 @@ export class FileService {
         return activation;
     }
 
+    hasProvider(scheme: string): boolean {
+        return this.providers.has(scheme);
+    }
+
     /**
      * Tests if the service (i.e. any of its registered {@link FileSystemProvider}s) can handle the given resource.
      * @param resource `URI` of the resource to test.
@@ -411,6 +431,14 @@ export class FileService {
      */
     canHandleResource(resource: URI): boolean {
         return this.providers.has(resource.scheme);
+    }
+
+    getReadOnlyMessage(resource: URI): MarkdownString | undefined {
+        const provider = this.providers.get(resource.scheme);
+        if (ReadOnlyMessageFileSystemProvider.is(provider)) {
+            return provider.readOnlyMessage;
+        }
+        return undefined;
     }
 
     /**
@@ -476,7 +504,7 @@ export class FileService {
     /**
      * Try to resolve file information and metadata for the given resource.
      * @param resource `URI` of the resource that should be resolved.
-     * @param options  Options to customize the resolvement process.
+     * @param options  Options to customize the resolution process.
      *
      * @return A promise that resolves if the resource could be successfully resolved.
      */
@@ -573,7 +601,7 @@ export class FileService {
 
     /**
      * Try to resolve file information and metadata for all given resource.
-     * @param toResolve An array of all the resources (and corresponding resolvement options) that should be resolved.
+     * @param toResolve An array of all the resources (and corresponding resolution options) that should be resolved.
      *
      * @returns A promise of all resolved resources. The promise is not rejected if any of the given resources cannot be resolved.
      * Instead this is reflected with the `success` flag of the corresponding {@link ResolveFileResult}.

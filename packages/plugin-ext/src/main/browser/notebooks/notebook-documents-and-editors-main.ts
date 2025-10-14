@@ -21,7 +21,7 @@
 import { Disposable, DisposableCollection } from '@theia/core';
 import { interfaces } from '@theia/core/shared/inversify';
 import { UriComponents } from '@theia/core/lib/common/uri';
-import { NotebookEditorWidget, NotebookService, NotebookEditorWidgetService } from '@theia/notebook/lib/browser';
+import { NotebookEditorWidget, NotebookService, NotebookEditorWidgetService, NotebookCellEditorService } from '@theia/notebook/lib/browser';
 import { NotebookModel } from '@theia/notebook/lib/browser/view-model/notebook-model';
 import { MAIN_RPC_CONTEXT, NotebookDocumentsAndEditorsDelta, NotebookDocumentsAndEditorsMain, NotebookEditorAddData, NotebookModelAddedData, NotebooksExt } from '../../../common';
 import { RPCProtocol } from '../../../common/rpc-protocol';
@@ -31,7 +31,7 @@ import { NotebookEditorsMainImpl } from './notebook-editors-main';
 import { NotebookDocumentsMainImpl } from './notebook-documents-main';
 import { diffMaps, diffSets } from '../../../common/collections';
 import { Mutex } from 'async-mutex';
-import throttle = require('@theia/core/shared/lodash.throttle');
+import { TabsMainImpl } from '../tabs/tabs-main';
 
 interface NotebookAndEditorDelta {
     removedDocuments: UriComponents[];
@@ -56,7 +56,6 @@ class NotebookAndEditorState {
         const documentDelta = diffSets(before.documents, after.documents);
         const editorDelta = diffMaps(before.textEditors, after.textEditors);
 
-        const newActiveEditor = before.activeEditor !== after.activeEditor ? after.activeEditor : undefined;
         const visibleEditorDelta = diffMaps(before.visibleEditors, after.visibleEditors);
 
         return {
@@ -64,7 +63,7 @@ class NotebookAndEditorState {
             removedDocuments: documentDelta.removed.map(e => e.uri.toComponents()),
             addedEditors: editorDelta.added,
             removedEditors: editorDelta.removed.map(removed => removed.id),
-            newActiveEditor: newActiveEditor,
+            newActiveEditor: after.activeEditor,
             visibleEditors: visibleEditorDelta.added.length === 0 && visibleEditorDelta.removed.length === 0
                 ? undefined
                 : [...after.visibleEditors].map(editor => editor[0])
@@ -98,6 +97,7 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
     constructor(
         rpc: RPCProtocol,
         container: interfaces.Container,
+        tabsMain: TabsMainImpl,
         protected readonly notebookDocumentsMain: NotebookDocumentsMainImpl,
         protected readonly notebookEditorsMain: NotebookEditorsMainImpl
     ) {
@@ -106,13 +106,21 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
         this.notebookService = container.get(NotebookService);
         this.notebookEditorService = container.get(NotebookEditorWidgetService);
         this.WidgetManager = container.get(WidgetManager);
+        const notebookCellEditorService = container.get(NotebookCellEditorService);
 
-        this.notebookService.onDidAddNotebookDocument(async () => this.throttleStateUpdate(), this, this.disposables);
-        this.notebookService.onDidRemoveNotebookDocument(async () => this.throttleStateUpdate(), this, this.disposables);
+        notebookCellEditorService.onDidChangeFocusedCellEditor(editor => this.proxy.$acceptActiveCellEditorChange(editor?.uri.toString() ?? null), this, this.disposables);
+
+        this.notebookService.onDidAddNotebookDocument(async () => this.updateState(), this, this.disposables);
+        this.notebookService.onDidRemoveNotebookDocument(async () => this.updateState(), this, this.disposables);
         // this.WidgetManager.onActiveEditorChanged(() => this.updateState(), this, this.disposables);
         this.notebookEditorService.onDidAddNotebookEditor(async editor => this.handleEditorAdd(editor), this, this.disposables);
         this.notebookEditorService.onDidRemoveNotebookEditor(async editor => this.handleEditorRemove(editor), this, this.disposables);
-        this.notebookEditorService.onDidChangeFocusedEditor(async editor => this.throttleStateUpdate(editor), this, this.disposables);
+        this.notebookEditorService.onDidChangeCurrentEditor(async editor => {
+            if (editor) {
+                await tabsMain.waitForWidget(editor);
+            }
+            this.updateState(editor);
+        }, this, this.disposables);
     }
 
     dispose(): void {
@@ -130,17 +138,15 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
         } else {
             this.editorListeners.set(editor.id, [disposable]);
         }
-        await this.throttleStateUpdate();
+        await this.updateState();
     }
 
     private handleEditorRemove(editor: NotebookEditorWidget): void {
         const listeners = this.editorListeners.get(editor.id);
         listeners?.forEach(listener => listener.dispose());
         this.editorListeners.delete(editor.id);
-        this.throttleStateUpdate();
+        this.updateState();
     }
-
-    private throttleStateUpdate = throttle((focusedEditor?: NotebookEditorWidget) => this.updateState(focusedEditor), 100);
 
     private async updateState(focusedEditor?: NotebookEditorWidget): Promise<void> {
         await this.updateMutex.runExclusive(async () => this.doUpdateState(focusedEditor));
@@ -195,14 +201,16 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
             addedEditors: delta.addedEditors.map(NotebooksAndEditorsMain.asEditorAddData),
         };
 
-        // send to extension FIRST
-        await this.proxy.$acceptDocumentsAndEditorsDelta(dto);
-
-        // handle internally
+        // Handle internally first
+        // In case the plugin wants to perform documents edits immediately
+        // we want to make sure that all events have already been setup
         this.notebookEditorsMain.handleEditorsRemoved(delta.removedEditors);
         this.notebookDocumentsMain.handleNotebooksRemoved(delta.removedDocuments);
         this.notebookDocumentsMain.handleNotebooksAdded(delta.addedDocuments);
         this.notebookEditorsMain.handleEditorsAdded(delta.addedEditors);
+
+        // Send to plugin last
+        await this.proxy.$acceptDocumentsAndEditorsDelta(dto);
     }
 
     private static isDeltaEmpty(delta: NotebookAndEditorDelta): boolean {
@@ -221,7 +229,7 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
         if (delta.visibleEditors?.length) {
             return false;
         }
-        if (delta.newActiveEditor) {
+        if (delta.newActiveEditor !== undefined) {
             return false;
         }
         return true;
@@ -245,7 +253,7 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
         return {
             id: notebookEditor.id,
             documentUri: uri.toComponents(),
-            selections: [],
+            selections: [{ start: 0, end: 0 }],
             visibleRanges: []
         };
     }

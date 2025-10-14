@@ -20,9 +20,8 @@ import { ContainerModule, interfaces } from '@theia/core/shared/inversify';
 import { ResourceResolver, CommandContribution } from '@theia/core/lib/common';
 import { WebSocketConnectionProvider, FrontendApplicationContribution, LabelProviderContribution, BreadcrumbsContribution } from '@theia/core/lib/browser';
 import { FileResourceResolver } from './file-resource';
-import { bindFileSystemPreferences } from './filesystem-preferences';
+import { bindFileSystemPreferences } from '../common/filesystem-preferences';
 import { FileSystemFrontendContribution } from './filesystem-frontend-contribution';
-import { FileUploadService } from './file-upload-service';
 import { FileTreeDecoratorAdapter, FileTreeLabelProvider } from './file-tree';
 import { FileService, FileServiceContribution } from './file-service';
 import { RemoteFileSystemProvider, RemoteFileSystemServer, remoteFileSystemPath, RemoteFileSystemProxyFactory } from '../common/remote-file-system-provider';
@@ -31,8 +30,11 @@ import { RemoteFileServiceContribution } from './remote-file-service-contributio
 import { FileSystemWatcherErrorHandler } from './filesystem-watcher-error-handler';
 import { FilepathBreadcrumbsContribution } from './breadcrumbs/filepath-breadcrumbs-contribution';
 import { BreadcrumbsFileTreeWidget, createFileTreeBreadcrumbsWidget } from './breadcrumbs/filepath-breadcrumbs-container';
-import { FilesystemSaveResourceService } from './filesystem-save-resource-service';
-import { SaveResourceService } from '@theia/core/lib/browser/save-resource-service';
+import { FilesystemSaveableService } from './filesystem-saveable-service';
+import { SaveableService } from '@theia/core/lib/browser/saveable-service';
+import { VSCodeFileServiceContribution, VSCodeFileSystemProvider } from './vscode-file-service-contribution';
+import { FileUploadService } from '../common/upload/file-upload';
+import { FileUploadServiceImpl } from './upload/file-upload-service-impl';
 
 export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bindFileSystemPreferences(bind);
@@ -46,12 +48,15 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bind(RemoteFileSystemProvider).toSelf().inSingletonScope();
     bind(RemoteFileServiceContribution).toSelf().inSingletonScope();
     bind(FileServiceContribution).toService(RemoteFileServiceContribution);
+    bind(VSCodeFileSystemProvider).toSelf().inSingletonScope();
+    bind(VSCodeFileServiceContribution).toSelf().inSingletonScope();
+    bind(FileServiceContribution).toService(VSCodeFileServiceContribution);
 
     bind(FileSystemWatcherErrorHandler).toSelf().inSingletonScope();
 
     bindFileResource(bind);
 
-    bind(FileUploadService).toSelf().inSingletonScope();
+    bind(FileUploadService).to(FileUploadServiceImpl).inSingletonScope();
 
     bind(FileSystemFrontendContribution).toSelf().inSingletonScope();
     bind(CommandContribution).toService(FileSystemFrontendContribution);
@@ -65,8 +70,8 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bind(FilepathBreadcrumbsContribution).toSelf().inSingletonScope();
     bind(BreadcrumbsContribution).toService(FilepathBreadcrumbsContribution);
 
-    bind(FilesystemSaveResourceService).toSelf().inSingletonScope();
-    rebind(SaveResourceService).toService(FilesystemSaveResourceService);
+    bind(FilesystemSaveableService).toSelf().inSingletonScope();
+    rebind(SaveableService).toService(FilesystemSaveableService);
 
     bind(FileTreeDecoratorAdapter).toSelf().inSingletonScope();
 });

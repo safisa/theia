@@ -18,7 +18,7 @@ import * as React from '@theia/core/shared/react';
 import { DebugProtocol } from '@vscode/debugprotocol/lib/debugProtocol';
 import { SingleTextInputDialog } from '@theia/core/lib/browser';
 import { ConsoleItem, CompositeConsoleItem } from '@theia/console/lib/browser/console-session';
-import { DebugSession } from '../debug-session';
+import { DebugSession, formatMessage } from '../debug-session';
 import { Severity } from '@theia/core/lib/common/severity';
 import * as monaco from '@theia/monaco-editor-core';
 import { nls } from '@theia/core';
@@ -152,6 +152,9 @@ export class DebugVariable extends ExpressionContainer {
     get name(): string {
         return this.variable.name;
     }
+    get evaluateName(): string | undefined {
+        return this.variable.evaluateName;
+    }
     protected _type: string | undefined;
     get type(): string | undefined {
         return this._type || this.variable.type;
@@ -159,6 +162,10 @@ export class DebugVariable extends ExpressionContainer {
     protected _value: string | undefined;
     get value(): string {
         return this._value || this.variable.value;
+    }
+
+    get readOnly(): boolean {
+        return this.variable.presentationHint?.attributes?.includes('readOnly') ?? false;
     }
 
     override render(): React.ReactNode {
@@ -188,23 +195,19 @@ export class DebugVariable extends ExpressionContainer {
         return !!this.session && !!this.session.capabilities.supportsSetVariable;
     }
     async setValue(value: string): Promise<void> {
-        if (!this.session) {
+        if (!this.session || value === this.value) {
             return;
         }
         const { name, parent } = this;
         const variablesReference = parent['variablesReference'];
-        try {
-            const response = await this.session.sendRequest('setVariable', { variablesReference, name, value });
-            this._value = response.body.value;
-            this._type = response.body.type;
-            this.variablesReference = response.body.variablesReference || 0;
-            this.namedVariables = response.body.namedVariables;
-            this.indexedVariables = response.body.indexedVariables;
-            this.elements = undefined;
-            this.session['fireDidChange']();
-        } catch (error) {
-            console.error('setValue failed:', error);
-        }
+        const response = await this.session.sendRequest('setVariable', { variablesReference, name, value });
+        this._value = response.body.value;
+        this._type = response.body.type;
+        this.variablesReference = response.body.variablesReference || 0;
+        this.namedVariables = response.body.namedVariables;
+        this.indexedVariables = response.body.indexedVariables;
+        this.elements = undefined;
+        this.session['fireDidChange']();
     }
 
     get supportCopyValue(): boolean {
@@ -234,18 +237,34 @@ export class DebugVariable extends ExpressionContainer {
     protected setNameRef = (nameRef: HTMLSpanElement | null) => this.nameRef = nameRef || undefined;
 
     async open(): Promise<void> {
-        if (!this.supportSetVariable) {
+        if (!this.supportSetVariable || this.readOnly) {
             return;
         }
         const input = new SingleTextInputDialog({
             title: nls.localize('theia/debug/debugVariableInput', 'Set {0} Value', this.name),
             initialValue: this.value,
-            placeholder: nls.localizeByDefault('Value')
+            placeholder: nls.localizeByDefault('Value'),
+            validate: async (value, mode) => {
+                if (!value) {
+                    return false;
+                }
+                if (mode === 'open') {
+                    try {
+                        await this.setValue(value);
+                    } catch (error) {
+                        console.error('setValue failed:', error);
+                        if (error.body?.error) {
+                            const errorMessage: DebugProtocol.Message = error.body.error;
+                            if (errorMessage.showUser) {
+                                return formatMessage(errorMessage.format, errorMessage.variables);
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
         });
-        const newValue = await input.open();
-        if (newValue) {
-            await this.setValue(newValue);
-        }
+        await input.open();
     }
 
 }
@@ -271,7 +290,7 @@ export namespace VirtualVariableItem {
 export class ExpressionItem extends ExpressionContainer {
 
     severity?: Severity;
-    static notAvailable = 'not available';
+    static notAvailable = nls.localizeByDefault('not available');
 
     protected _value = ExpressionItem.notAvailable;
     get value(): string {
@@ -312,15 +331,16 @@ export class ExpressionItem extends ExpressionContainer {
 
     async evaluate(context: string = 'repl'): Promise<void> {
         const session = this.session;
-        if (session) {
-            try {
-                const body = await session.evaluate(this._expression, context);
-                this.setResult(body);
-            } catch (err) {
-                this.setResult(undefined, err.message);
-            }
-        } else {
-            this.setResult(undefined, 'Please start a debug session to evaluate');
+        if (!session?.currentFrame) {
+            this.setResult(undefined, ExpressionItem.notAvailable);
+            return;
+        }
+
+        try {
+            const body = await session.evaluate(this._expression, context);
+            this.setResult(body);
+        } catch (err) {
+            this.setResult(undefined, err.message);
         }
     }
 
@@ -379,6 +399,10 @@ export class DebugScope extends ExpressionContainer {
 
     get name(): string {
         return this.raw.name;
+    }
+
+    expandByDefault(): boolean {
+        return this.raw.presentationHint === 'locals';
     }
 
 }

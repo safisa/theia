@@ -15,12 +15,12 @@
 // *****************************************************************************
 
 import { Disposable, SelectionService, Event, UNTITLED_SCHEME, DisposableCollection } from '@theia/core/lib/common';
-import { Widget, BaseWidget, Message, Saveable, SaveableSource, Navigatable, StatefulWidget, lock, TabBar, DockPanel } from '@theia/core/lib/browser';
+import { Widget, BaseWidget, Message, Saveable, SaveableSource, Navigatable, StatefulWidget, lock, TabBar, DockPanel, unlock, ExtractableWidget } from '@theia/core/lib/browser';
 import URI from '@theia/core/lib/common/uri';
-import { find } from '@theia/core/shared/@phosphor/algorithm';
+import { find } from '@theia/core/shared/@lumino/algorithm';
 import { TextEditor } from './editor';
 
-export class EditorWidget extends BaseWidget implements SaveableSource, Navigatable, StatefulWidget {
+export class EditorWidget extends BaseWidget implements SaveableSource, Navigatable, StatefulWidget, ExtractableWidget {
 
     protected toDisposeOnTabbarChange = new DisposableCollection();
     protected currentTabbar: TabBar<Widget> | undefined;
@@ -38,17 +38,31 @@ export class EditorWidget extends BaseWidget implements SaveableSource, Navigata
         this.toDispose.push(this.toDisposeOnTabbarChange);
         this.toDispose.push(this.editor.onSelectionChanged(() => this.setSelection()));
         this.toDispose.push(this.editor.onFocusChanged(() => this.setSelection()));
+        this.toDispose.push(this.editor.onDidChangeReadOnly(isReadonly => {
+            if (isReadonly) {
+                lock(this.title);
+            } else {
+                unlock(this.title);
+            }
+        }));
         this.toDispose.push(Disposable.create(() => {
             if (this.selectionService.selection === this.editor) {
                 this.selectionService.selection = undefined;
             }
         }));
     }
+    isExtractable: boolean = true;
+    secondaryWindow: Window | undefined;
 
     setSelection(): void {
         if (this.editor.isFocused() && this.selectionService.selection !== this.editor) {
             this.selectionService.selection = this.editor;
         }
+    }
+
+    protected override handleVisiblityChanged(isNowVisible: boolean): void {
+        this.editor.handleVisibilityChanged(isNowVisible);
+        super.handleVisiblityChanged(isNowVisible);
     }
 
     get saveable(): Saveable {

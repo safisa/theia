@@ -17,13 +17,15 @@
 import { injectable, inject } from '@theia/core/shared/inversify';
 import { MenuPath } from '@theia/core/lib/common/menu';
 import { EDITOR_CONTEXT_MENU } from '@theia/editor/lib/browser';
-import { ContextMenuRenderer, toAnchor } from '@theia/core/lib/browser';
-import { Menu } from '@theia/core/shared/@phosphor/widgets';
-import { CommandRegistry } from '@theia/core/shared/@phosphor/commands';
+import { Anchor, ContextMenuAccess, ContextMenuRenderer, Coordinate } from '@theia/core/lib/browser';
+import { Menu } from '@theia/core/shared/@lumino/widgets';
+import { CommandRegistry } from '@theia/core/shared/@lumino/commands';
 import { IContextMenuService } from '@theia/monaco-editor-core/esm/vs/platform/contextview/browser/contextView';
 import { IContextMenuDelegate } from '@theia/monaco-editor-core/esm/vs/base/browser/contextmenu';
+import { IAction, Separator, SubmenuAction } from '@theia/monaco-editor-core/esm/vs/base/common/actions';
 import { MenuItemAction } from '@theia/monaco-editor-core/esm/vs/platform/actions/common/actions';
 import { Event, Emitter } from '@theia/monaco-editor-core/esm/vs/base/common/event';
+import { StandardMouseEvent } from '@theia/monaco-editor-core/esm/vs/base/browser/mouseEvent';
 
 @injectable()
 export class MonacoContextMenuService implements IContextMenuService {
@@ -38,12 +40,33 @@ export class MonacoContextMenuService implements IContextMenuService {
         return this.onDidShowContextMenuEmitter.event;
     };
 
-    constructor(@inject(ContextMenuRenderer) protected readonly contextMenuRenderer: ContextMenuRenderer) {
+    @inject(ContextMenuRenderer) protected readonly contextMenuRenderer: ContextMenuRenderer;
+
+    toAnchor(anchor: HTMLElement | Coordinate | StandardMouseEvent): Anchor {
+        if (anchor instanceof HTMLElement) {
+            return { x: anchor.offsetLeft, y: anchor.offsetTop };
+        } else if (anchor instanceof StandardMouseEvent) {
+            return { x: anchor.posx, y: anchor.posy };
+        } else {
+            return anchor;
+        }
+    }
+
+    private getContext(delegate: IContextMenuDelegate): HTMLElement {
+        const anchor = delegate.getAnchor();
+        if (anchor instanceof HTMLElement) {
+            return anchor;
+        } else if (anchor instanceof StandardMouseEvent) {
+            return anchor.target;
+        } else {
+            return window.document.body; // last resort
+        }
     }
 
     showContextMenu(delegate: IContextMenuDelegate): void {
-        const anchor = toAnchor(delegate.getAnchor());
+        const anchor = this.toAnchor(delegate.getAnchor());
         const actions = delegate.getActions();
+        const context = this.getContext(delegate);
         const onHide = () => {
             delegate.onHide?.(false);
             this.onDidHideContextMenuEmitter.fire();
@@ -53,19 +76,41 @@ export class MonacoContextMenuService implements IContextMenuService {
         // In case of 'Quick Fix' actions come as 'CodeActionAction' items
         if (actions.length > 0 && actions[0] instanceof MenuItemAction) {
             this.contextMenuRenderer.render({
+                context: context,
                 menuPath: this.menuPath(),
                 anchor,
                 onHide
             });
         } else {
-            const commands = new CommandRegistry();
-            const menu = new Menu({
-                commands
-            });
+            const menu = new Menu({ commands: new CommandRegistry() });
+            this.populateMenu(menu, actions);
+            menu.aboutToClose.connect(() => onHide());
+            menu.open(anchor.x, anchor.y);
+            this.contextMenuRenderer.current = new ContextMenuAccess(menu);
+        }
+        this.onDidShowContextMenuEmitter.fire();
+    }
 
-            for (const action of actions) {
-                const commandId = 'quickfix_' + actions.indexOf(action);
-                commands.addCommand(commandId, {
+    protected populateMenu(menu: Menu, actions: readonly IAction[]): void {
+        for (const action of actions) {
+            if (action instanceof SubmenuAction) {
+                const submenu = new Menu({ commands: new CommandRegistry() });
+                submenu.title.label = action.label;
+                submenu.title.caption = action.tooltip;
+                if (action.class) {
+                    submenu.addClass(action.class);
+                }
+                this.populateMenu(submenu, action.actions);
+                menu.addItem({
+                    type: 'submenu',
+                    submenu
+                });
+            } else if (action instanceof Separator) {
+                menu.addItem({
+                    type: 'separator'
+                });
+            } else {
+                menu.commands.addCommand(action.id, {
                     label: action.label,
                     className: action.class,
                     isToggled: () => Boolean(action.checked),
@@ -74,13 +119,10 @@ export class MonacoContextMenuService implements IContextMenuService {
                 });
                 menu.addItem({
                     type: 'command',
-                    command: commandId
+                    command: action.id
                 });
             }
-            menu.aboutToClose.connect(() => onHide());
-            menu.open(anchor.x, anchor.y);
         }
-        this.onDidShowContextMenuEmitter.fire();
     }
 
     protected menuPath(): MenuPath {

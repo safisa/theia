@@ -17,11 +17,10 @@ import * as React from '@theia/core/shared/react';
 import { ACTION_ITEM } from '@theia/core/lib/browser';
 import { NotebookCellToolbarItem } from './notebook-cell-toolbar-factory';
 import { DisposableCollection, Event } from '@theia/core';
-import { ContextKeyChangeEvent } from '@theia/core/lib/browser/context-key-service';
 
 export interface NotebookCellToolbarProps {
     getMenuItems: () => NotebookCellToolbarItem[];
-    onContextKeysChanged: Event<ContextKeyChangeEvent>;
+    onContextChanged: Event<void>;
 }
 
 interface NotebookCellToolbarState {
@@ -34,10 +33,9 @@ abstract class NotebookCellActionBar extends React.Component<NotebookCellToolbar
 
     constructor(props: NotebookCellToolbarProps) {
         super(props);
-        this.toDispose.push(props.onContextKeysChanged(e => {
-            if (this.props.getMenuItems().some(item => item.contextKeys ? e.affects(item.contextKeys) : false)) {
-                this.setState({ inlineItems: this.props.getMenuItems() });
-            }
+        this.toDispose.push(props.onContextChanged(e => {
+            const menuItems = this.props.getMenuItems();
+            this.setState({ inlineItems: menuItems });
         }));
         this.state = { inlineItems: this.props.getMenuItems() };
     }
@@ -47,7 +45,7 @@ abstract class NotebookCellActionBar extends React.Component<NotebookCellToolbar
     }
 
     protected renderItem(item: NotebookCellToolbarItem): React.ReactNode {
-        return <div key={item.id} title={item.label} onClick={item.onClick} className={`${item.icon} ${ACTION_ITEM} theia-notebook-cell-toolbar-item`} />;
+        return <div key={item.id} id={item.id} title={item.label} onClick={item.onClick} className={`${item.icon} ${ACTION_ITEM} theia-notebook-cell-toolbar-item`} />;
     }
 
 }
@@ -56,7 +54,7 @@ export class NotebookCellToolbar extends NotebookCellActionBar {
 
     override render(): React.ReactNode {
         return <div className='theia-notebook-cell-toolbar'>
-            {this.state.inlineItems.map(item => this.renderItem(item))}
+            {this.state.inlineItems.filter(e => e.isVisible()).map(item => this.renderItem(item))}
         </div>;
     }
 
@@ -65,8 +63,8 @@ export class NotebookCellToolbar extends NotebookCellActionBar {
 export class NotebookCellSidebar extends NotebookCellActionBar {
 
     override render(): React.ReactNode {
-        return <div className='theia-notebook-cell-sidebar'>
-            {this.state.inlineItems.map(item => this.renderItem(item))}
+        return <div className='theia-notebook-cell-sidebar-toolbar'>
+            {this.state.inlineItems.filter(e => e.isVisible()).map(item => this.renderItem(item))}
         </div>;
     }
 }

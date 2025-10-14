@@ -21,7 +21,7 @@ import { Emitter } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { Md5 } from 'ts-md5';
 import throttle = require('@theia/core/shared/lodash.throttle');
-import { NotificationPreferences } from './notification-preferences';
+import { NotificationPreferences } from '../common/notification-preferences';
 import { ContextKeyService, ContextKey } from '@theia/core/lib/browser/context-key-service';
 import { OpenerService } from '@theia/core/lib/browser';
 import URI from '@theia/core/lib/common/uri';
@@ -180,18 +180,23 @@ export class NotificationManager extends MessageClient {
     override showMessage(plainMessage: PlainMessage): Promise<string | undefined> {
         const messageId = this.getMessageId(plainMessage);
 
-        let notification = this.notifications.get(messageId);
-        if (!notification) {
-            const message = this.contentRenderer.renderMessage(plainMessage.text);
-            const type = this.toNotificationType(plainMessage.type);
-            const actions = Array.from(new Set(plainMessage.actions));
-            const source = plainMessage.source;
-            const expandable = this.isExpandable(message, source, actions);
-            const collapsed = expandable;
-            notification = { messageId, message, type, actions, expandable, collapsed };
-            this.notifications.set(messageId, notification);
+        this.toasts.delete(messageId);
+        this.notifications.delete(messageId);
+        const existingDeferred = this.deferredResults.get(messageId);
+        if (existingDeferred) {
+            this.deferredResults.delete(messageId);
+            existingDeferred.resolve(undefined);
         }
-        const result = this.deferredResults.get(messageId) || new Deferred<string | undefined>();
+
+        const message = this.contentRenderer.renderMessage(plainMessage.text);
+        const type = this.toNotificationType(plainMessage.type);
+        const actions = Array.from(new Set(plainMessage.actions));
+        const source = plainMessage.source;
+        const expandable = this.isExpandable(message, source, actions);
+        const collapsed = expandable;
+        const notification = { messageId, message, type, actions, expandable, collapsed };
+        this.notifications.set(messageId, notification);
+        const result = new Deferred<string | undefined>();
         this.deferredResults.set(messageId, result);
 
         if (!this.centerVisible) {

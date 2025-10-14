@@ -18,7 +18,7 @@ import { injectable, inject } from '@theia/core/shared/inversify';
 import { Event, Emitter, DisposableCollection } from '@theia/core';
 import { WidgetFactory } from '@theia/core/lib/browser';
 import { OutlineViewWidget, OutlineViewWidgetFactory, OutlineSymbolInformationNode } from './outline-view-widget';
-import { Widget } from '@theia/core/shared/@phosphor/widgets';
+import { Widget } from '@theia/core/shared/@lumino/widgets';
 
 @injectable()
 export class OutlineViewService implements WidgetFactory {
@@ -30,6 +30,7 @@ export class OutlineViewService implements WidgetFactory {
     protected readonly onDidChangeOpenStateEmitter = new Emitter<boolean>();
     protected readonly onDidSelectEmitter = new Emitter<OutlineSymbolInformationNode>();
     protected readonly onDidOpenEmitter = new Emitter<OutlineSymbolInformationNode>();
+    protected readonly onDidTapNodeEmitter = new Emitter<OutlineSymbolInformationNode>();
 
     constructor(@inject(OutlineViewWidgetFactory) protected factory: OutlineViewWidgetFactory) { }
 
@@ -49,8 +50,16 @@ export class OutlineViewService implements WidgetFactory {
         return this.onDidChangeOpenStateEmitter.event;
     }
 
+    get onDidTapNode(): Event<OutlineSymbolInformationNode> {
+        return this.onDidTapNodeEmitter.event;
+    }
+
     get open(): boolean {
         return this.widget !== undefined && this.widget.isVisible;
+    }
+
+    didTapNode(node: OutlineSymbolInformationNode): void {
+        this.onDidTapNodeEmitter.fire(node);
     }
 
     /**

@@ -41,8 +41,8 @@ import { Splice } from '../../common/arrays';
 import { UriComponents } from '../../common/uri-components';
 import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
 import { PluginSharedStyle } from './plugin-shared-style';
-import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/platform/theme/common/themeService';
 import { IconUrl } from '../../common';
+import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/base/common/themables';
 
 export class PluginScmResourceGroup implements ScmResourceGroup {
 
@@ -52,6 +52,8 @@ export class PluginScmResourceGroup implements ScmResourceGroup {
     readonly onDidSplice = this.onDidSpliceEmitter.event;
 
     get hideWhenEmpty(): boolean { return !!this.features.hideWhenEmpty; }
+
+    get contextValue(): string | undefined { return this.features.contextValue; }
 
     private readonly onDidChangeEmitter = new Emitter<void>();
     readonly onDidChange: Event<void> = this.onDidChangeEmitter.event;

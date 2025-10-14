@@ -14,7 +14,7 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { injectable, inject, named } from 'inversify';
+import { injectable, inject, named, postConstruct } from 'inversify';
 import { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
 import URI from '../common/uri';
 import { ContributionProvider } from './contribution-provider';
@@ -25,6 +25,7 @@ import { CancellationToken } from './cancellation';
 import { ApplicationError } from './application-error';
 import { ReadableStream, Readable } from './stream';
 import { SyncReferenceCollection, Reference } from './reference';
+import { MarkdownString } from './markdown-rendering';
 
 export interface ResourceVersion {
 }
@@ -55,7 +56,14 @@ export interface Resource extends Disposable {
      * Undefined if a resource did not read content yet.
      */
     readonly encoding?: string | undefined;
-    readonly isReadonly?: boolean;
+
+    readonly onDidChangeReadOnly?: Event<boolean | MarkdownString>;
+
+    readonly readOnly?: boolean | MarkdownString;
+
+    readonly initiallyDirty?: boolean;
+    /** If false, the application should not attempt to auto-save this resource. */
+    readonly autosaveable?: boolean;
     /**
      * Reads latest content of this resource.
      *
@@ -173,6 +181,11 @@ export namespace ResourceError {
 export const ResourceResolver = Symbol('ResourceResolver');
 export interface ResourceResolver {
     /**
+     * Resolvers will be ordered by descending priority.
+     * Default: 0
+     */
+    priority?: number;
+    /**
      * Reject if a resource cannot be provided.
      */
     resolve(uri: URI): MaybePromise<Resource>;
@@ -188,6 +201,11 @@ export class DefaultResourceProvider {
         @inject(ContributionProvider) @named(ResourceResolver)
         protected readonly resolversProvider: ContributionProvider<ResourceResolver>
     ) { }
+
+    @postConstruct()
+    init(): void {
+        this.resolversProvider.getContributions().sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    }
 
     /**
      * Reject if a resource cannot be provided.
@@ -207,7 +225,7 @@ export class DefaultResourceProvider {
 }
 
 export class MutableResource implements Resource {
-    private contents: string = '';
+    protected contents: string = '';
 
     constructor(readonly uri: URI) {
     }
@@ -272,7 +290,7 @@ export class InMemoryResources implements ResourceResolver {
         const resourceUri = uri.toString();
         const resource = this.resources.get(resourceUri);
         if (!resource) {
-            throw new Error(`Cannot update non-existed in-memory resource '${resourceUri}'`);
+            throw new Error(`Cannot update non-existent in-memory resource '${resourceUri}'`);
         }
         resource.saveContents(contents);
         return resource;
@@ -349,11 +367,11 @@ export class UntitledResourceResolver implements ResourceResolver {
         }
     }
 
-    async createUntitledResource(content?: string, extension?: string, uri?: URI): Promise<UntitledResource> {
+    async createUntitledResource(content?: string, extension?: string, uri?: URI, encoding?: string): Promise<UntitledResource> {
         if (!uri) {
             uri = this.createUntitledURI(extension);
         }
-        return new UntitledResource(this.resources, uri, content);
+        return new UntitledResource(this.resources, uri, content, encoding);
     }
 
     createUntitledURI(extension?: string, parent?: URI): URI {
@@ -374,12 +392,17 @@ export class UntitledResourceResolver implements ResourceResolver {
 export class UntitledResource implements Resource {
 
     protected readonly onDidChangeContentsEmitter = new Emitter<void>();
+    readonly initiallyDirty: boolean;
+    readonly autosaveable = false;
+    readonly encoding: string | undefined;
     get onDidChangeContents(): Event<void> {
         return this.onDidChangeContentsEmitter.event;
     }
 
-    constructor(private resources: Map<string, UntitledResource>, public uri: URI, private content?: string) {
+    constructor(private resources: Map<string, UntitledResource>, public uri: URI, private content?: string, encoding?: string) {
+        this.initiallyDirty = (content !== undefined && content.length > 0);
         this.resources.set(this.uri.toString(), this);
+        this.encoding = encoding;
     }
 
     dispose(): void {
@@ -406,10 +429,6 @@ export class UntitledResource implements Resource {
     }
 
     get version(): ResourceVersion | undefined {
-        return undefined;
-    }
-
-    get encoding(): string | undefined {
         return undefined;
     }
 }
