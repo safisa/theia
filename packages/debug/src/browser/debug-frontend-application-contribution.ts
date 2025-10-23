@@ -61,6 +61,7 @@ import { DebugToolBar } from './view/debug-toolbar-widget';
 import { ConsoleWidget } from '@theia/console/lib/browser/console-widget';
 import { ConsoleContentWidget } from '@theia/console/lib/browser/console-content-widget';
 import { ConsoleContextMenu } from '@theia/console/lib/browser/console-contribution';
+import { DebugHoverWidget } from './editor/debug-hover-widget';
 
 export namespace DebugMenus {
     export const DEBUG = [...MAIN_MENU_BAR, '6_debug'];
@@ -642,6 +643,13 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         registerMenuActions(DebugVariablesWidget.WATCH_MENU,
             DebugCommands.WATCH_VARIABLE
         );
+        registerMenuActions(DebugHoverWidget.EDIT_MENU,
+            DebugCommands.COPY_VARIABLE_VALUE,
+            DebugCommands.COPY_VARIABLE_AS_EXPRESSION
+        );
+        registerMenuActions(DebugHoverWidget.WATCH_MENU,
+            DebugCommands.WATCH_VARIABLE
+        );
 
         registerMenuActions(DebugWatchWidget.EDIT_MENU,
             DebugCommands.EDIT_WATCH_EXPRESSION,
@@ -703,10 +711,16 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
     override registerCommands(registry: CommandRegistry): void {
         super.registerCommands(registry);
         registry.registerCommand(DebugCommands.START, {
-            execute: (config?: DebugSessionOptions) => this.start(false, config)
+            execute: (config?: DebugSessionOptions) => {
+                const validConfig = DebugSessionOptions.is(config) ? config : undefined;
+                return this.start(false, validConfig);
+            }
         });
         registry.registerCommand(DebugCommands.START_NO_DEBUG, {
-            execute: (config?: DebugSessionOptions) => this.start(true, config)
+            execute: (config?: DebugSessionOptions) => {
+                const validConfig = DebugSessionOptions.is(config) ? config : undefined;
+                return this.start(true, validConfig);
+            }
         });
         registry.registerCommand(DebugCommands.STOP, {
             execute: () => this.manager.terminateSession(),
@@ -1323,7 +1337,7 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
     }
 
     async start(noDebug?: boolean, debugSessionOptions?: DebugSessionOptions): Promise<void> {
-        let current = debugSessionOptions ? debugSessionOptions : this.configurations.current;
+        let current = debugSessionOptions || this.configurations.current;
         // If no configurations are currently present, create the `launch.json` and prompt users to select the config.
         if (!current) {
             await this.configurations.addConfiguration();
@@ -1507,7 +1521,11 @@ export class DebugFrontendApplicationContribution extends AbstractViewContributi
         const { currentWidget } = this.shell;
         return currentWidget instanceof DebugVariablesWidget && currentWidget || undefined;
     }
-    get variablesSource(): DebugVariablesWidget | ConsoleContentWidget | undefined {
+    get variablesSource(): DebugHoverWidget | DebugVariablesWidget | ConsoleContentWidget | undefined {
+        const hover = this.editors.model?.hover;
+        if (hover?.isVisible) {
+            return hover;
+        }
         return this.variables ?? this.consoleWidget?.content;
     }
     get selectedVariable(): DebugVariable | undefined {
